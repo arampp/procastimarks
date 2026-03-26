@@ -1,0 +1,342 @@
+= Procastimarks — Activity Diagrams
+:revnumber: 0.1
+:revdate: 2026-03-26
+:toc:
+:toc-title: Table of Contents
+:numbered:
+
+Activity diagrams use PlantUML notation.
+Each diagram covers the full flow including alternate and error paths.
+
+== AD-1 — Capture Bookmark
+
+Covers the complete flow from bookmarklet click to bookmark persisted (or error).
+
+[plantuml, ad-capture-bookmark, svg]
+----
+@startuml
+title AD-1: Capture Bookmark
+
+|Browser|
+start
+:Click bookmarklet;
+:Open new tab\n/add?url=<url>&api_key=<key>;
+
+|App|
+:Receive GET /add request;
+
+if (API key valid?) then (no)
+  :Return HTTP 401\nRender error page;
+  stop
+endif
+
+:Fetch target URL server-side;
+
+if (Fetch successful?) then (yes)
+  :Extract <title> and\n<meta description>;
+else (no)
+  :Use raw URL as title;\n:Leave description empty;
+endif
+
+:Render add-bookmark form\n(URL, title, description pre-filled);
+
+|Browser|
+:Display form to Owner;
+:Owner reviews / edits title & description;
+:Owner types tags\n(autocomplete suggestions shown);
+:Owner writes optional comment;
+:Owner submits form;
+
+|App|
+:Receive POST /bookmarks;
+
+if (API key / session valid?) then (no)
+  :Return HTTP 401;
+  stop
+endif
+
+:Normalise tags\n(lowercase, trim);
+
+if (URL already exists?) then (yes)
+  :Re-render form with error:\n"This URL is already saved.";
+  |Browser|
+  :Owner sees error;
+  stop
+endif
+
+:Write bookmark to SQLite\n(set created_at = UTC now);
+:Redirect to / (main list);
+
+|Browser|
+:Render main list view;
+:New bookmark visible at top;
+stop
+@enduml
+----
+
+== AD-2 — View Bookmark List
+
+Covers initial load, authenticated and unauthenticated paths, and the empty state.
+
+[plantuml, ad-view-list, svg]
+----
+@startuml
+title AD-2: View Bookmark List
+
+|Browser|
+start
+:Navigate to /;
+
+|App|
+:Receive GET /;
+
+if (API key / session valid?) then (no)
+  :Return HTTP 401\nRender error page;
+  stop
+endif
+
+:Query SQLite:\nSELECT * FROM bookmarks\nORDER BY created_at DESC;
+
+if (Result set empty?) then (yes)
+  :Render empty-state view:\n"No bookmarks yet.";
+else (no)
+  :Render bookmark list\n(title, description, tags, date);
+endif
+
+|Browser|
+:Display list or empty state to Owner;
+stop
+@enduml
+----
+
+== AD-3 — Search Bookmarks
+
+Covers live search, no-results state, clearing the query, and combined tag+search.
+
+[plantuml, ad-search, svg]
+----
+@startuml
+title AD-3: Search Bookmarks
+
+|Browser / SPA|
+start
+:Owner types character(s)\nin search box;
+:Debounce timer starts\n(~300 ms);
+
+if (Owner clears search box?) then (yes)
+  :Cancel debounce;
+  :Restore full list\n(reverse-chronological);
+  stop
+endif
+
+:Debounce timer fires;
+:SPA calls Leptos server function\nwith (query, active_tag?);
+
+|App|
+:Build FTS5 query across\ntitle, description, comment, tags;
+
+if (Active tag filter?) then (yes)
+  :Add tag constraint (AND);
+endif
+
+:Execute query against SQLite;
+
+if (Results found?) then (yes)
+  :Return matching bookmarks;
+else (no)
+  :Return empty result set;
+endif
+
+|Browser / SPA|
+if (Results found?) then (yes)
+  :Render filtered list;
+else (no)
+  :Render no-results message:\n"No bookmarks match your search.";
+endif
+
+:Owner reads results;
+
+if (Owner clicks a result?) then (yes)
+  :Open original URL in new tab;
+endif
+
+stop
+@enduml
+----
+
+== AD-4 — Filter by Tag
+
+Covers tag selection, deselection, combined filter, and no-results state.
+
+[plantuml, ad-tag-filter, svg]
+----
+@startuml
+title AD-4: Filter by Tag
+
+|Browser / SPA|
+start
+:Owner clicks a tag\n(sidebar or bookmark entry);
+
+if (Tag already active?) then (yes)
+  :Deactivate tag filter;
+  :SPA restores unfiltered\n(or search-only) list;
+  stop
+endif
+
+:Set tag as active filter;
+:SPA calls server function\nwith (tag, search_query?);
+
+|App|
+:Query SQLite:\nWHERE tags CONTAINS tag;
+
+if (Active search query?) then (yes)
+  :Apply FTS5 search constraint (AND);
+endif
+
+:Execute query;
+
+if (Results found?) then (yes)
+  :Return matching bookmarks;
+else (no)
+  :Return empty result set;
+endif
+
+|Browser / SPA|
+if (Results found?) then (yes)
+  :Render filtered list;\n:Highlight active tag;
+else (no)
+  :Render no-results message;
+endif
+
+stop
+@enduml
+----
+
+== AD-5 — Delete Bookmark
+
+Covers the confirmation step, cancellation, confirmed delete, and idempotent delete.
+
+[plantuml, ad-delete, svg]
+----
+@startuml
+title AD-5: Delete Bookmark
+
+|Browser / SPA|
+start
+:Owner clicks Delete\non a bookmark entry;
+:Show confirmation prompt:\n"Delete this bookmark?\nThis cannot be undone.";
+
+if (Owner confirms?) then (no)
+  :Dismiss prompt;\n:List unchanged;
+  stop
+endif
+
+:SPA calls server function\nDELETE /bookmarks/<id>;
+
+|App|
+if (API key / session valid?) then (no)
+  :Return HTTP 401;
+  stop
+endif
+
+:Execute DELETE FROM bookmarks\nWHERE id = <id>;
+
+if (Row existed and was deleted?) then (yes)
+  :Return 200 OK;
+else (no — already gone)
+  :Return 200 OK (idempotent);
+endif
+
+|Browser / SPA|
+:Remove entry from list reactively;
+:List shows remaining bookmarks;
+stop
+@enduml
+----
+
+== AD-6 — Authenticate
+
+Covers API-key auth, session-cookie reuse, missing credentials, and the public
+health-check bypass.
+
+[plantuml, ad-authenticate, svg]
+----
+@startuml
+title AD-6: Authenticate
+
+|Browser|
+start
+:Send HTTP request to App;
+
+|App|
+if (Request path is /health?) then (yes)
+  :Return HTTP 200\n{"status":"ok"};
+  stop
+endif
+
+if (Valid session cookie present?) then (yes)
+  :Proceed to requested route;
+  stop
+endif
+
+if (api_key query param present?) then (no)
+  :Return HTTP 401\nRender error page;
+  stop
+endif
+
+:Compare api_key to configured\nAPI_KEY (constant-time);
+
+if (Keys match?) then (yes)
+  :Set session cookie\n(browser-session lifetime);
+  :Proceed to requested route;
+else (no)
+  :Return HTTP 401\nRender error page;
+endif
+
+stop
+@enduml
+----
+
+== AD-7 — Tag Autocomplete
+
+Covers the autocomplete suggestion flow during bookmark capture, including the
+no-suggestions case and keyboard/mouse selection.
+
+[plantuml, ad-tag-autocomplete, svg]
+----
+@startuml
+title AD-7: Tag Autocomplete
+
+|Browser / SPA|
+start
+:Owner focuses tag input\non add-bookmark form;
+:Owner types one or more characters;
+:SPA calls server function\nwith prefix string;
+
+|App|
+:Query SQLite:\nSELECT DISTINCT tag\nWHERE tag LIKE prefix%\nORDER BY tag;
+
+if (Matches found?) then (yes)
+  :Return list of matching tags;
+else (no)
+  :Return empty list;
+endif
+
+|Browser / SPA|
+if (Matches found?) then (yes)
+  :Render dropdown\nof suggestions;
+
+  if (Owner selects suggestion?) then (yes)
+    :Insert tag into tag list\n(lowercased, trimmed);
+    :Clear input field\n:Close dropdown;
+  else (Owner keeps typing)
+    :Repeat from "types characters";
+  endif
+else (no)
+  :No dropdown shown;\n:Owner can type free-form tag\nand press Enter/comma;
+endif
+
+:Tag added to pending tag list;
+stop
+@enduml
+----

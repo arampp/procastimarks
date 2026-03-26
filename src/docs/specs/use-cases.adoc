@@ -1,0 +1,438 @@
+= Procastimarks — Use Cases
+:revnumber: 0.1
+:revdate: 2026-03-26
+:toc:
+:toc-title: Table of Contents
+:numbered:
+
+== Actors
+
+[cols="1,3", options="header"]
+|===
+|Actor |Description
+
+|Owner
+|The single registered user of the self-hosted instance.
+All interactions with the application are performed by this actor.
+
+|Browser
+|The web browser running on the Owner's device.
+Acts as the execution environment for the bookmarklet JavaScript.
+
+|Target Website
+|The third-party website whose URL the Owner wishes to save.
+The application fetches metadata from this site server-side.
+
+|Procastimarks App
+|The Leptos/Axum application running inside the Docker container.
+Processes requests, fetches metadata, and persists data to SQLite.
+|===
+
+== Use Case Overview
+
+[plantuml, use-case-overview, svg]
+----
+@startuml
+left to right direction
+
+actor Owner as O
+actor "Target Website" as TW
+
+rectangle Procastimarks {
+  usecase "UC-1\nCapture Bookmark" as UC1
+  usecase "UC-2\nView Bookmark List" as UC2
+  usecase "UC-3\nSearch Bookmarks" as UC3
+  usecase "UC-4\nFilter by Tag" as UC4
+  usecase "UC-5\nDelete Bookmark" as UC5
+  usecase "UC-6\nAuthenticate" as UC6
+}
+
+O --> UC1
+O --> UC2
+O --> UC3
+O --> UC4
+O --> UC5
+UC1 ..> UC6 : <<include>>
+UC2 ..> UC6 : <<include>>
+UC1 ..> TW  : fetches metadata
+@enduml
+----
+
+== UC-1 — Capture Bookmark
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Detail
+
+|ID
+|UC-1
+
+|Name
+|Capture Bookmark
+
+|Goal
+|Save a web page URL together with its metadata and user-supplied tags so it can be
+retrieved later.
+
+|Primary Actor
+|Owner
+
+|Secondary Actors
+|Browser, Target Website, Procastimarks App
+
+|Preconditions
+a|
+* The Owner's browser has the Procastimarks bookmarklet installed in the toolbar.
+* The Owner is viewing a page they wish to save.
+* The Procastimarks application is running and reachable.
+
+|Postconditions (success)
+a|
+* A new bookmark record exists in the database with the correct URL, title,
+  description, tags, comment, and creation timestamp.
+* The URL uniqueness constraint is satisfied.
+* The Owner is on the main list view, which shows the newly saved bookmark at the top.
+
+|Postconditions (failure — duplicate URL)
+a|
+* No new record is created.
+* The add-bookmark form remains visible with an error message:
+  "This URL is already saved."
+
+|Postconditions (failure — authentication)
+a|
+* No new record is created.
+* The Owner is shown an authentication error page.
+
+|Main Success Scenario
+a|
+. The Owner clicks the bookmarklet while viewing the target page.
+. The browser opens `/add?url=<encoded-url>&api_key=<key>` in a new tab.
+. The App validates the API key.
+. The App fetches the target page server-side and extracts the `<title>` and
+  `<meta name="description">` values.
+. The add-bookmark form is rendered with the URL, title, and description pre-filled.
+. The Owner reviews the pre-filled data, optionally edits title/description,
+  types tags using autocomplete, and writes an optional comment.
+. The Owner submits the form.
+. The App normalises tags (lowercase, trim whitespace).
+. The App checks the URL uniqueness constraint — it passes.
+. The App writes the bookmark record to SQLite with the current UTC timestamp.
+. The App redirects the Owner to the main list view.
+. The new bookmark appears at the top of the list.
+
+|Alternative: Metadata Fetch Fails (A1)
+a|
+. Steps 1–3 as in main scenario.
+. The App attempts to fetch the target page; the request times out, returns an
+  error status, or the page requires authentication.
+. The title field is pre-filled with the raw URL string; the description field
+  is empty.
+. Steps 6–12 proceed as in main scenario.
+
+|Alternative: Duplicate URL (A2)
+a|
+. Steps 1–10 as in main scenario (up to and including the uniqueness check).
+. The uniqueness check fails — the URL already exists in the database.
+. The App re-renders the add-bookmark form with the error message:
+  "This URL is already saved."
+. The Owner either closes the tab or navigates away.
+
+|Alternative: Invalid API Key (A3)
+a|
+. The Owner clicks the bookmarklet.
+. The browser opens the `/add` route.
+. The App validates the API key — it is missing or incorrect.
+. The App returns an HTTP 401 response and renders an error page:
+  "Unauthorised. Check your bookmarklet API key."
+. No metadata is fetched; no form is shown.
+|===
+
+== UC-2 — View Bookmark List
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Detail
+
+|ID
+|UC-2
+
+|Name
+|View Bookmark List
+
+|Goal
+|Browse all saved bookmarks in reverse-chronological order.
+
+|Primary Actor
+|Owner
+
+|Preconditions
+a|
+* The Procastimarks application is running and reachable.
+* The Owner has a valid API key (embedded in the bookmarklet URL or active session
+  cookie).
+
+|Postconditions (success)
+a|
+* The Owner sees a paginated or scrollable list of all bookmarks, newest first.
+* Each entry shows: title (link), description excerpt, tags, and creation date.
+
+|Postconditions (empty collection)
+a|
+* The Owner sees an empty-state message: "No bookmarks yet. Use the bookmarklet to
+  save your first one."
+
+|Main Success Scenario
+a|
+. The Owner navigates to the application root `/`.
+. The App validates the API key / session cookie.
+. The App queries SQLite for all bookmarks ordered by `created_at` descending.
+. The App renders the list.
+. The Owner browses the list.
+
+|Alternative: No Bookmarks (A1)
+a|
+. Steps 1–3 as in main scenario.
+. The query returns zero rows.
+. The App renders the empty-state view.
+
+|Alternative: Invalid API Key (A2)
+a|
+. The Owner navigates to `/`.
+. The App finds no valid API key or session cookie.
+. The App returns HTTP 401 and renders an error page.
+|===
+
+== UC-3 — Search Bookmarks
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Detail
+
+|ID
+|UC-3
+
+|Name
+|Search Bookmarks
+
+|Goal
+|Find bookmarks matching a topic keyword across all text fields.
+
+|Primary Actor
+|Owner
+
+|Preconditions
+a|
+* The Owner is authenticated and on the main list view.
+* At least one bookmark exists in the database.
+
+|Postconditions (results found)
+a|
+* The list is filtered to show only bookmarks whose title, description, comment,
+  or tags contain the search term.
+* The filter is applied reactively without a full page reload.
+
+|Postconditions (no results)
+a|
+* The list is empty and a no-results message is shown:
+  "No bookmarks match your search."
+
+|Main Success Scenario
+a|
+. The Owner types a keyword into the search box on the main list view.
+. After a short debounce period, the SPA issues a query via a Leptos server function.
+. The App queries the SQLite FTS5 index across title, description, comment, and tags.
+. The SPA updates the list reactively with the matching bookmarks.
+. The Owner clicks a result to open the original page in a new tab.
+
+|Alternative: No Matching Results (A1)
+a|
+. Steps 1–3 as in main scenario.
+. The FTS5 query returns zero rows.
+. The SPA renders the no-results message.
+
+|Alternative: Search Cleared (A2)
+a|
+. The Owner clears the search box.
+. The SPA restores the full reverse-chronological list.
+
+|Alternative: Search Combined with Tag Filter (A3)
+a|
+. The Owner has an active tag filter and types in the search box.
+. Both the tag filter and the search term are applied simultaneously (AND logic).
+. The list shows only bookmarks that satisfy both constraints.
+|===
+
+== UC-4 — Filter by Tag
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Detail
+
+|ID
+|UC-4
+
+|Name
+|Filter by Tag
+
+|Goal
+|Narrow the bookmark list to entries carrying a specific tag.
+
+|Primary Actor
+|Owner
+
+|Preconditions
+a|
+* The Owner is authenticated and on the main list view.
+* At least one bookmark with at least one tag exists.
+
+|Postconditions (results found)
+a|
+* The list shows only bookmarks that carry the selected tag.
+
+|Postconditions (no results)
+a|
+* The list is empty and the no-results message is shown.
+
+|Main Success Scenario
+a|
+. The Owner clicks a tag label in the tag filter sidebar or on a bookmark entry.
+. The SPA updates the active tag filter state.
+. The App queries SQLite for bookmarks with that tag.
+. The list updates reactively.
+
+|Alternative: Deselect Tag (A1)
+a|
+. The Owner clicks the active tag label again.
+. The filter is removed and the full list (or current search results) is restored.
+
+|Alternative: No Bookmarks for Tag (A2)
+a|
+. The Owner selects a tag.
+. The query returns zero rows.
+. The no-results message is shown.
+
+|Alternative: Combined with Search (A3)
+a|
+. See UC-3, Alternative A3.
+|===
+
+== UC-5 — Delete Bookmark
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Detail
+
+|ID
+|UC-5
+
+|Name
+|Delete Bookmark
+
+|Goal
+|Permanently remove a bookmark from the collection.
+
+|Primary Actor
+|Owner
+
+|Preconditions
+a|
+* The Owner is authenticated and on the main list view.
+* The bookmark to be deleted exists in the database.
+
+|Postconditions (confirmed delete)
+a|
+* The bookmark record is permanently removed from SQLite.
+* The bookmark no longer appears in the list.
+* Any tags associated only with this bookmark may become orphaned
+  (no cleanup required in MVP).
+
+|Postconditions (cancelled delete)
+a|
+* The bookmark record is unchanged.
+* The list is unchanged.
+
+|Main Success Scenario
+a|
+. The Owner clicks the delete action on a bookmark entry.
+. The App renders a confirmation prompt: "Delete this bookmark? This cannot be undone."
+. The Owner confirms.
+. The App issues a DELETE via a Leptos server function.
+. SQLite removes the record.
+. The SPA removes the entry from the list reactively.
+
+|Alternative: Owner Cancels (A1)
+a|
+. Steps 1–2 as in main scenario.
+. The Owner dismisses the confirmation prompt.
+. No deletion occurs; the list is unchanged.
+
+|Alternative: Bookmark Already Deleted (A2)
+a|
+. The Owner confirms the delete (step 3).
+. The App issues the DELETE but the record no longer exists (e.g., deleted in another
+  tab).
+. The App treats this as a success (idempotent delete) and removes the entry from the
+  list.
+|===
+
+== UC-6 — Authenticate
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Detail
+
+|ID
+|UC-6
+
+|Name
+|Authenticate
+
+|Goal
+|Verify that the requestor is the authorised owner before granting access to any
+protected route.
+
+|Primary Actor
+|Owner (indirectly, via bookmarklet or direct navigation)
+
+|Preconditions
+a|
+* The application is configured with a non-empty `API_KEY` environment variable.
+
+|Postconditions (success)
+a|
+* The requested route is served.
+* A session cookie is set so subsequent requests within the same browser session do
+  not require the `api_key` query parameter.
+
+|Postconditions (failure)
+a|
+* HTTP 401 is returned.
+* An error page is rendered.
+* No application data is exposed.
+
+|Main Success Scenario
+a|
+. An incoming request carries `?api_key=<key>` as a query parameter.
+. The App compares the value to the configured `API_KEY` using a constant-time
+  comparison.
+. The values match.
+. The App sets a session cookie and proceeds to serve the route.
+
+|Alternative: Cookie Session (A1)
+a|
+. An incoming request carries a valid session cookie (set in a previous successful
+  authentication).
+. No `api_key` query parameter is required.
+. The App validates the session cookie and serves the route.
+
+|Alternative: Missing or Invalid Key (A2)
+a|
+. The request carries no `api_key` parameter and no valid session cookie.
+. The App returns HTTP 401 and an error page.
+
+|Alternative: Health Check Endpoint (A3)
+a|
+. A request arrives at `GET /health`.
+. The App responds with HTTP 200 and `{"status":"ok"}` without checking authentication.
+|===

@@ -1,0 +1,69 @@
+= Procastimarks — Specification
+:revnumber: 0.1
+:revdate: 2026-03-26
+:toc:
+:toc-title: Table of Contents
+
+This index collects all specification documents for the Procastimarks project.
+
+== Documents
+
+[cols="1,2,3", options="header"]
+|===
+|Document |File |Contents
+
+|Product Requirements Document
+|link:prd.adoc[prd.adoc]
+|Goals, non-goals, functional and non-functional requirements, MVP scope, constraints.
+
+|Use Cases
+|link:use-cases.adoc[use-cases.adoc]
+|Actors, use case overview diagram, detailed use cases with preconditions,
+postconditions, main success scenarios, and alternate/error flows.
+
+|Activity Diagrams
+|link:activity-diagrams.adoc[activity-diagrams.adoc]
+|PlantUML activity diagrams for all flows (capture, list, search, tag filter,
+delete, authentication, tag autocomplete) including alternate and error paths.
+
+|Acceptance Criteria
+|link:acceptance-criteria.adoc[acceptance-criteria.adoc]
+|Gherkin (Given/When/Then) scenarios for every functional requirement (FR-1 – FR-6).
+|===
+
+== Traceability Matrix
+
+[cols="1,1,1,1", options="header"]
+|===
+|FR (PRD) |Use Case |Activity Diagram |Acceptance Criteria
+
+|FR-1 Capture Bookmark
+|UC-1
+|AD-1, AD-7
+|AC-1.1 – AC-1.7
+
+|FR-2 Main List View
+|UC-2
+|AD-2
+|AC-2.1 – AC-2.4
+
+|FR-3 Search
+|UC-3
+|AD-3
+|AC-3.1 – AC-3.5
+
+|FR-4 Tag Autocomplete
+|UC-3, UC-1
+|AD-7
+|AC-4.1 – AC-4.5
+
+|FR-5 Delete Bookmark
+|UC-5
+|AD-5
+|AC-5.1 – AC-5.4
+
+|FR-6 Authentication
+|UC-6
+|AD-6
+|AC-6.1 – AC-6.6
+|===

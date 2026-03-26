@@ -1,0 +1,265 @@
+= Procastimarks — Product Requirements Document
+:revnumber: 0.1
+:revdate: 2026-03-26
+:toc:
+:toc-title: Table of Contents
+:numbered:
+
+== Overview
+
+Procastimarks is a single-user, self-hosted bookmark manager built entirely in Rust.
+It solves the problem of URL discovery without time: when you find something interesting
+on the web but cannot read it right now, you want to capture it in one action and
+find it again later by topic.
+
+The product is a proof of concept that a full-stack web application can be written
+solely in the Rust programming language.
+
+== Problem Statement
+
+When browsing the web, a person frequently encounters interesting pages they have no
+time to explore immediately.
+Existing browser bookmark managers require too many steps to capture a page, and their
+search capabilities are inadequate for topic-based retrieval weeks or months later.
+The result is a growing, disorganised list of bookmarks that is never consulted.
+
+The specific pain:
+
+* Capturing a URL interrupts the current task (multiple tabs, forms, decisions).
+* Retrieval fails because the user remembers the topic but not the exact URL or title.
+* Bookmarks scattered across devices are inaccessible without a browser-sync account.
+
+== Goals
+
+[cols="1,3", options="header"]
+|===
+|ID |Goal
+
+|G-1
+|Capture a bookmark in a single browser action with no context-switch.
+
+|G-2
+|Retrieve any saved bookmark by topic within a few seconds.
+
+|G-3
+|Access the collection from any device via a web browser.
+
+|G-4
+|Prove that a full-stack web application can be built entirely in Rust.
+|===
+
+== Non-Goals
+
+The following are explicitly out of scope:
+
+* Social or collaborative bookmark sharing.
+* A browser extension (solution must be browser-agnostic).
+* A native mobile application.
+* A read-it-later or article reader feature.
+* A knowledge graph or second-brain system.
+* Multi-user accounts or role-based access control.
+* Data import from external bookmark managers (post-MVP).
+* Edit of existing bookmarks (post-MVP).
+
+== Users
+
+There is exactly one user: the owner of the self-hosted instance.
+No user-management feature is required.
+
+== Functional Requirements
+
+=== Bookmark Data Model
+
+Each bookmark contains the following fields:
+
+[cols="1,1,1,3", options="header"]
+|===
+|Field |Type |Source |Description
+
+|`id`
+|UUID / integer
+|System
+|Unique identifier, generated on save.
+
+|`url`
+|String (URL)
+|User (via bookmarklet)
+|The canonical URL of the saved page. Must be unique across all bookmarks.
+
+|`title`
+|String
+|Auto-fetched, user-editable
+|Page title fetched server-side from the URL's HTML `<title>` tag.
+Falls back to the URL string if the fetch fails.
+
+|`description`
+|String (optional)
+|Auto-fetched, user-editable
+|Meta description fetched server-side from the `<meta name="description">` tag.
+Empty string if unavailable.
+
+|`tags`
+|List of strings
+|User
+|User-supplied labels. Stored lowercased and trimmed. May be empty.
+
+|`comment`
+|String (optional)
+|User
+|Free-text personal note. May be empty.
+
+|`created_at`
+|Timestamp
+|System
+|UTC timestamp set automatically at save time.
+|===
+
+=== Capture Flow (FR-1)
+
+. The user clicks the Procastimarks bookmarklet in their browser toolbar.
+. The bookmarklet opens a new browser tab pointing to the `/add` route of the
+  Procastimarks SPA, with the current page URL passed as a query parameter:
+  `\https://<host>/add?url=<encoded-current-url>&api_key=<key>`.
+. The SPA sends the URL to a Leptos server function that fetches the target page
+  server-side and extracts title and description.
+. The add-bookmark form is displayed pre-filled with the URL, title, and description.
+. The user optionally edits title/description, adds tags (with autocomplete), and
+  writes a comment.
+. The user submits the form.
+. If the URL already exists in the database, the save is rejected and an error message
+  is shown: "This URL is already saved."
+. On success, the user is redirected to the main list view.
+
+=== Main List View (FR-2)
+
+* Default view shows all bookmarks in reverse-chronological order (newest first).
+* Each bookmark entry displays: title (as a link to the original URL), description
+  excerpt, tags, and creation date.
+* A search box at the top filters the list as the user types (search-as-you-type).
+* A tag filter sidebar (or tag list) allows narrowing by one or more tags.
+
+=== Search (FR-3)
+
+* The search box queries all text fields: title, description, comment, and tags.
+* Search is unified — a single input controls all fields simultaneously.
+* Results update without a full page reload (SPA reactive update).
+* SQLite FTS5 is the underlying search engine.
+
+=== Tag Autocomplete (FR-4)
+
+* When the user types in the tag input on the add-bookmark form, existing tags that
+  match the prefix are suggested.
+* Tags are stored and compared in lowercase, trimmed form.
+* Selecting an autocomplete suggestion inserts the tag.
+
+=== Delete Bookmark (FR-5)
+
+* Each bookmark in the list has a delete action.
+* Deleting a bookmark permanently removes it from the database.
+* A confirmation step (e.g., a confirmation dialog or a dedicated confirmation page)
+  prevents accidental deletion.
+
+=== Authentication (FR-6)
+
+* The application is protected by a single API key configured at startup via an
+  environment variable.
+* The bookmarklet includes the API key as a query parameter.
+* All routes except a public health-check endpoint require the API key to be present
+  as a query parameter or session cookie.
+* The security trade-off (key visible in bookmarklet source and browser history) is
+  accepted for a single-user personal tool on a private server.
+
+== Non-Functional Requirements
+
+=== Performance
+
+No formal SLA. The application must feel responsive for a personal collection of up to
+a few thousand bookmarks. SQLite FTS5 is sufficient for this scale without tuning.
+
+=== Reliability
+
+Data is stored in a single SQLite file.
+Backup is handled at the Docker volume / server-infrastructure level and is out of
+scope for the application itself.
+
+=== Security
+
+* The application must not be accessible without the API key.
+* HTTPS termination is handled by the operator's infrastructure (reverse proxy or
+  Cloudflare); the application itself serves plain HTTP inside Docker.
+
+=== Portability
+
+The application is packaged as a single Docker image.
+Deployment requires only Docker Compose and a mounted volume for the SQLite file.
+
+=== Usability
+
+* The UI uses a vintage, early-2000s visual style (system fonts, table-based layout,
+  muted colours, minimal decoration).
+* The style is purely cosmetic; the architecture and implementation must remain simple.
+* The UI must be usable on desktop browsers. Mobile is not a design target.
+
+== MVP Scope
+
+The Minimum Viable Product includes:
+
+* [x] Bookmarklet-triggered capture via `/add?url=...` form.
+* [x] Server-side title and description fetching with URL fallback.
+* [x] Reverse-chronological bookmark list.
+* [x] Unified full-text search (search-as-you-type).
+* [x] Tag filter.
+* [x] Tag autocomplete (lowercase, trimmed).
+* [x] Delete bookmark with confirmation.
+* [x] API-key authentication.
+* [x] Unique URL constraint with user-facing error.
+* [x] Docker Compose deployment with SQLite volume.
+
+Out of scope for MVP, planned for later iterations:
+
+* [ ] Edit bookmark.
+* [ ] Bulk operations.
+* [ ] Browser bookmarks import.
+* [ ] In-app data export / backup endpoint.
+
+== Constraints
+
+[cols="1,3", options="header"]
+|===
+|Constraint |Detail
+
+|Language
+|Rust for all application code (backend and frontend).
+Minimal vanilla JavaScript glue (< 50 lines) is acceptable for browser-specific
+behaviour that cannot be expressed in WASM.
+
+|Backend framework
+|Axum (HTTP transport layer).
+
+|Frontend framework
+|Leptos with server functions (no separate REST API).
+CSR or SSR mode to be decided during implementation; server functions eliminate the
+need for a manually designed API layer.
+
+|Database
+|SQLite with the FTS5 extension. One file per deployment.
+
+|Deployment
+|Single Docker container. Docker Compose for orchestration.
+SQLite file on a named Docker volume. No bundled reverse proxy.
+
+|Hosting
+|Private self-hosted server. Single-user.
+
+|Budget
+|Zero. Personal project.
+
+|Timeline
+|One weekend for the MVP.
+|===
+
+== Inspiration
+
+* *del.icio.us* — tag-based social bookmarking (social features excluded).
+* *raindrop.io* — visual bookmark manager (visual richness excluded; vintage style
+  instead).
