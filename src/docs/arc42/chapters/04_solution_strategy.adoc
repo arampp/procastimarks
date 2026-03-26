@@ -67,7 +67,10 @@ the SPA requirement.
 |Axum
 
 |Frontend framework
-|Leptos (with server functions; CSR or SSR mode TBD at implementation time)
+|Leptos 0.7 with server functions in SSR mode.
+SSR was chosen for first-paint performance and to co-locate server function
+execution with the Axum process without a separate WASM-only bundle.
+Axum version: 0.7 (required by `leptos_axum` 0.7).
 
 |Database driver
 |`rusqlite` with the bundled SQLite feature and FTS5 enabled
