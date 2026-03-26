@@ -1,0 +1,20 @@
+services:
+  app:
+    image: procastimarks:latest
+    build: .
+    restart: unless-stopped
+    ports:
+      # Bind only to localhost — HTTPS termination handled by the reverse proxy.
+      - "127.0.0.1:3000:3000"
+    environment:
+      - DATABASE_URL=/data/bookmarks.db
+      - API_KEY=${API_KEY}          # Required — set in .env or shell environment
+      - BIND_ADDRESS=0.0.0.0:3000
+      - RUST_LOG=${RUST_LOG:-info}
+    volumes:
+      - procastimarks_data:/data
+
+volumes:
+  procastimarks_data:
+    # WARNING: `docker compose down -v` will destroy this volume and ALL bookmark data.
+    # Use `docker compose down` (without -v) to stop the application without data loss.

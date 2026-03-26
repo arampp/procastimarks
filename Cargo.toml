@@ -1,0 +1,56 @@
+[workspace]
+resolver = "2"
+members = ["app"]
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP server — must match the version leptos_axum 0.7 was compiled against (axum 0.7)
+axum = { version = "0.7", features = ["macros"] }
+
+# Frontend / full-stack
+leptos = { version = "0.7" }
+leptos_axum = { version = "0.7" }
+leptos_meta = { version = "0.7" }
+leptos_router = { version = "0.7" }
+
+# Persistence
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# HTTP client (metadata fetcher)
+reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+
+# HTML parsing (metadata fetcher)
+scraper = { version = "0.22" }
+
+# Error handling
+anyhow = { version = "1" }
+thiserror = { version = "2" }
+
+# Serialisation
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+
+# Logging / tracing
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Tower utilities (graceful shutdown, etc.)
+tower = { version = "0.5" }
+tower-http = { version = "0.5", features = ["fs"] }
+
+# HTTP types (shared between axum and leptos tests)
+http = { version = "1" }
+http-body-util = { version = "0.1" }
+
+[profile.release]
+opt-level = "z"   # size-optimise for Docker image
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = true

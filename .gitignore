@@ -1,2 +1,18 @@
 .gradle/
 build/
+
+# Rust / Cargo
+target/
+Cargo.lock.bak
+
+# cargo-leptos generated site output
+target/site/
+
+# Environment secrets
+.env
+
+# SQLite database files
+*.db
+*.db-shm
+*.db-wal
+

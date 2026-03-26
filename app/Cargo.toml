@@ -1,0 +1,67 @@
+[package]
+name = "procastimarks"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+# The library is compiled for both the server (native) and the browser (WASM).
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "procastimarks"
+path = "src/main.rs"
+
+# ─── Dependencies shared between server and client ───────────────────────────
+[dependencies]
+anyhow        = { workspace = true }
+leptos        = { workspace = true }
+leptos_meta   = { workspace = true }
+leptos_router = { workspace = true }
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
+
+# Server-only dependencies — excluded from the WASM build
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+axum              = { workspace = true }
+http              = { workspace = true }
+http-body-util    = { workspace = true }
+leptos_axum       = { workspace = true }
+reqwest           = { workspace = true }
+rusqlite          = { workspace = true }
+scraper           = { workspace = true }
+tokio             = { workspace = true }
+tower             = { workspace = true }
+tower-http        = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# ─── Dev dependencies ────────────────────────────────────────────────────────
+[dev-dependencies]
+tokio         = { workspace = true }
+axum          = { workspace = true }
+http          = { workspace = true }
+http-body-util = { workspace = true }
+
+# ─── cargo-leptos configuration ──────────────────────────────────────────────
+[package.metadata.leptos]
+# Output name used by cargo-leptos for the WASM bundle and binary.
+output-name = "procastimarks"
+
+# The site root folder — served at `/pkg` and `/`.
+site-root = "target/site"
+
+# Where cargo-leptos places the compiled WASM, JS shim, and CSS.
+site-pkg-dir = "pkg"
+
+# The address the dev server binds to.
+watch-additional-files = ["style"]
+
+# Tailwind / CSS pipeline (none for MVP — system fonts only).
+# style-file = ""
+
+# The features to enable for the server build.
+features = []
+
+# Whether to use hash-based filenames for cache busting.
+hash-files = true
