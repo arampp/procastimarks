@@ -1,6 +1,6 @@
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
 # Uses the official Rust image which includes cargo, rustup, and all build deps.
-FROM rust:1.83 AS builder
+FROM rust:1.85 AS builder
 
 # Install cargo-leptos and the WASM target.
 RUN rustup target add wasm32-unknown-unknown && \
