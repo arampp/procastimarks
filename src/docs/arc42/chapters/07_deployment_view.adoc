@@ -8,53 +8,148 @@ ifndef::imagesdir[:imagesdir: ../../images]
 
 :toc:
 
-
-
 [[section-deployment-view]]
-
-
 == Deployment View
 
+=== Infrastructure Level 1 — Overview
 
+[plantuml, c4-deployment, svg]
+----
+@startuml
+!include <C4/C4_Deployment>
 
+LAYOUT_WITH_LEGEND()
 
+title Deployment Diagram — Procastimarks
 
-=== Infrastructure Level 1
+Deployment_Node(internet, "Internet", "Public network") {
+  Person(owner, "Owner", "Uses a desktop browser\nfrom any device.")
+  System_Ext(targetWeb, "Target Website", "Third-party web page.")
+}
 
+Deployment_Node(server, "Private Server", "Linux host, owner-managed") {
 
+  Deployment_Node(proxy, "Reverse Proxy", "nginx / Caddy / Cloudflare\n(operator-managed, outside scope)") {
+    Container(proxyProcess, "Proxy Process", "nginx / caddy", "Terminates TLS.\nForwards to app on :3000.")
+  }
 
+  Deployment_Node(dockerEngine, "Docker Engine") {
 
+    Deployment_Node(composeProject, "Docker Compose project: procastimarks") {
 
-_**<Overview Diagram>**_
+      Deployment_Node(appContainer, "Container: app", "Linux / Rust runtime") {
+        Container(appProcess, "Procastimarks App", "Rust binary",
+          "Leptos SSR + Axum.\nListens on :3000.")
+      }
+
+      Deployment_Node(volume, "Named Volume: procastimarks_data", "Docker volume") {
+        ContainerDb(sqliteFile, "bookmarks.db", "SQLite file",
+          "Persists all bookmark data.\nMounted at /data/bookmarks.db.")
+      }
+    }
+  }
+}
+
+Rel(owner, proxyProcess, "HTTPS :443")
+Rel(proxyProcess, appProcess, "HTTP :3000")
+Rel(appProcess, sqliteFile, "rusqlite\nFile I/O")
+Rel(appProcess, targetWeb, "HTTPS GET\n(metadata fetch)")
+@enduml
+----
 
 Motivation::
+The simplest possible deployment: one container, one file, one command.
+`docker compose up -d` starts the application.
+`docker compose down` stops it without touching the data volume.
 
-_<explanation in text form>_
-
-Quality and/or Performance Features::
-
-_<explanation in text form>_
+Quality and Performance Features::
+* The named volume survives container recreation and image upgrades.
+* The multi-stage Docker build produces a minimal image (scratch or distroless base)
+  with only the compiled Rust binary and the WASM assets.
+* TLS termination, certificate management, and HTTP-to-HTTPS redirection are
+  delegated to the operator's existing reverse proxy.
 
 Mapping of Building Blocks to Infrastructure::
-_<description of the mapping>_
 
+[cols="1,2", options="header"]
+|===
+|Building Block |Infrastructure Element
 
-=== Infrastructure Level 2
+|Axum Router + Auth Middleware
+|`appProcess` (Rust binary, port 3000)
 
+|Leptos SSR Shell + UI Components (WASM)
+|`appProcess` — WASM bundle served from `/pkg/` within the same binary
 
+|Server Functions + Domain + Persistence
+|`appProcess` — server-side execution within the same binary
 
+|Metadata Fetcher
+|`appProcess` — outbound HTTPS via `reqwest`
 
+|SQLite Database
+|`sqliteFile` on `procastimarks_data` named volume
+|===
 
-==== _<Infrastructure Element 1>_
+=== Infrastructure Level 2 — Docker Compose Configuration
 
-_<diagram + explanation>_
+The `docker-compose.yml` at the repository root defines the deployment unit.
 
-==== _<Infrastructure Element 2>_
+[source,yaml]
+----
+# Illustrative — actual values TBD at implementation time
+services:
+  app:
+    image: procastimarks:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"   # only reachable via reverse proxy
+    environment:
+      - DATABASE_URL=/data/bookmarks.db
+      - API_KEY=${API_KEY}       # set in .env or shell environment
+    volumes:
+      - procastimarks_data:/data
 
-_<diagram + explanation>_
+volumes:
+  procastimarks_data:
+----
 
-...
+Environment Variables::
 
-==== _<Infrastructure Element n>_
+[cols="1,1,2", options="header"]
+|===
+|Variable |Required |Description
 
-_<diagram + explanation>_
+|`DATABASE_URL`
+|Yes
+|Absolute path to the SQLite file inside the container.
+Example: `/data/bookmarks.db`.
+
+|`API_KEY`
+|Yes
+|The secret key embedded in the bookmarklet URL.
+Must be a long, random string.  No default value; the application refuses to start
+if this variable is unset or empty.
+|===
+
+Multi-Stage Docker Build::
+
+[source,dockerfile]
+----
+# Stage 1 — build
+FROM rust:latest AS builder
+WORKDIR /app
+COPY . .
+RUN cargo build --release
+
+# Stage 2 — runtime
+FROM debian:bookworm-slim
+COPY --from=builder /app/target/release/procastimarks /usr/local/bin/
+COPY --from=builder /app/target/site /usr/local/share/procastimarks/site/
+EXPOSE 3000
+CMD ["procastimarks"]
+----
+
+NOTE: The exact base image and WASM asset paths are determined at implementation
+time.  The multi-stage principle (build in full Rust image, run in minimal image)
+is a fixed architectural decision.

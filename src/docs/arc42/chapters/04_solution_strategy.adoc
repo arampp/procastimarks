@@ -8,12 +8,101 @@ ifndef::imagesdir[:imagesdir: ../../images]
 
 :toc:
 
-
-
 [[section-solution-strategy]]
 == Solution Strategy
 
+=== Core Decisions
 
+[cols="1,2,3", options="header"]
+|===
+|Quality Goal |Decision |Justification
 
+|Simplicity
+|Single-binary deployment with SQLite.
+No separate database server, no message broker, no cache layer.
+|Every additional process or service multiplies operational complexity.
+SQLite is sufficient at personal scale and eliminates an entire class of
+infrastructure problems.
 
+|Simplicity
+|Leptos server functions as the data layer.
+No manually designed REST API.
+|Server functions are Rust async functions annotated with `#[server]`.
+Leptos generates the HTTP glue automatically.
+This removes a layer of boilerplate (route definitions, serialisation/deserialisation
+contracts, client-side fetch wrappers) while keeping the data flow type-safe
+end-to-end.
 
+|Retrievability
+|SQLite FTS5 for full-text search over all bookmark fields.
+|FTS5 provides ranked full-text search with minimal configuration.
+For a personal collection of thousands of items it is orders of magnitude faster
+than a LIKE-based scan and requires no external search service.
+
+|Retrievability
+|Tag-first navigation with lowercase-normalised tags.
+|Tags are the primary retrieval signal.  Normalising to lowercase at write time
+prevents duplicates caused by capitalisation differences and makes tag matching
+case-insensitive by default.
+
+|Deployability
+|Single Docker image + Docker Compose + named volume.
+|The owner can deploy, upgrade, and roll back with two commands.
+The named volume survives container recreation.
+
+|Rust Demonstrability
+|Leptos (WASM) for the frontend compiled from Rust.
+|Leptos is the most mature Rust WASM SPA framework that supports server-side
+rendering and server functions, satisfying both the full-stack Rust constraint and
+the SPA requirement.
+|===
+
+=== Technology Decisions
+
+[cols="1,2", options="header"]
+|===
+|Concern |Technology
+
+|HTTP server
+|Axum
+
+|Frontend framework
+|Leptos (with server functions; CSR or SSR mode TBD at implementation time)
+
+|Database driver
+|`rusqlite` with the bundled SQLite feature and FTS5 enabled
+
+|HTTP client (metadata fetch)
+|`reqwest` (async, TLS-enabled)
+
+|HTML metadata extraction
+|`scraper` crate (CSS-selector-based HTML parsing)
+
+|Containerisation
+|Docker (multi-stage build: cargo build → minimal runtime image)
+
+|Orchestration
+|Docker Compose
+|===
+
+=== Decomposition Strategy
+
+The application is decomposed into three layers that map directly to Leptos's
+server-function model:
+
+[cols="1,3", options="header"]
+|===
+|Layer |Responsibility
+
+|UI (Leptos components, WASM)
+|Renders the SPA.  Manages reactive state (search query, active tag filter,
+bookmark list).  Calls server functions for all data operations.
+
+|Server Functions (Rust, compiled for both WASM and native)
+|Thin orchestration layer.  Validates input, delegates to the domain layer,
+and returns typed results to the UI.
+
+|Domain / Persistence (Rust, server-only)
+|Encapsulates bookmark business rules (URL uniqueness, tag normalisation,
+FTS5 queries) and all SQLite access via `rusqlite`.
+|===

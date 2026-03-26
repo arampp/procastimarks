@@ -8,25 +8,182 @@ ifndef::imagesdir[:imagesdir: ../../images]
 
 :toc:
 
-
-
 [[section-runtime-view]]
 == Runtime View
 
+Each scenario shows the message flow between the major building blocks
+for a key runtime interaction.
 
+=== RT-1 — Capture Bookmark (happy path)
 
+[plantuml, rt-capture-happy, svg]
+----
+@startuml
+title RT-1: Capture Bookmark — Happy Path
 
+actor Owner
+participant Browser
+participant "Axum Router\n+ Auth" as Router
+participant "Leptos SSR\nShell" as Leptos
+participant "Server Fn:\nfetch_metadata" as FetchMeta
+participant "Server Fn:\nsave_bookmark" as SaveFn
+participant "Persistence" as DB
+participant "Target\nWebsite" as Target
 
+Owner -> Browser : Click bookmarklet
+Browser -> Router : GET /add?url=<url>&api_key=<key>
+Router -> Router : Validate API key
+Router -> Router : Set session cookie
+Router -> Leptos : Render AddBookmarkForm
+Leptos -> FetchMeta : fetch_metadata(url)
+FetchMeta -> Target : GET <url>
+Target --> FetchMeta : 200 OK + HTML
+FetchMeta -> FetchMeta : Extract <title> and\n<meta description>
+FetchMeta --> Leptos : (title, description)
+Leptos --> Browser : HTML + WASM bundle\n(form pre-filled)
 
-=== <Runtime Scenario 1>
+Owner -> Browser : Review, add tags & comment, submit
+Browser -> Router : POST /api/save_bookmark\n(url, title, description, tags, comment)
+Router -> Router : Validate session cookie
+Router -> SaveFn : save_bookmark(input)
+SaveFn -> SaveFn : Normalise tags\n(lowercase, trim)
+SaveFn -> DB : CHECK url uniqueness
+DB --> SaveFn : Not found — OK
+SaveFn -> DB : INSERT bookmark
+DB --> SaveFn : Success
+SaveFn --> Browser : Ok(bookmark_id)
 
+Browser -> Router : GET / (redirect)
+Router -> DB : SELECT * ORDER BY created_at DESC
+DB --> Router : Bookmark list
+Router --> Browser : Render list (new item at top)
+Browser --> Owner : Main list view
+@enduml
+----
 
-* _<insert runtime diagram or textual description of the scenario>_
-* _<insert description of the notable aspects of the interactions between the
-building block instances depicted in this diagram.>_
+=== RT-2 — Capture Bookmark (duplicate URL)
 
-=== <Runtime Scenario 2>
+[plantuml, rt-capture-duplicate, svg]
+----
+@startuml
+title RT-2: Capture Bookmark — Duplicate URL
 
-=== ...
+actor Owner
+participant Browser
+participant "Axum Router\n+ Auth" as Router
+participant "Server Fn:\nsave_bookmark" as SaveFn
+participant "Persistence" as DB
 
-=== <Runtime Scenario n>
+Owner -> Browser : Submit add-bookmark form
+Browser -> Router : POST /api/save_bookmark
+Router -> SaveFn : save_bookmark(input)
+SaveFn -> DB : CHECK url uniqueness
+DB --> SaveFn : Found — URL exists
+SaveFn --> Browser : Err("This URL is already saved.")
+Browser --> Owner : Re-render form\nwith error message
+@enduml
+----
+
+=== RT-3 — Capture Bookmark (metadata fetch failure)
+
+[plantuml, rt-capture-fetch-fail, svg]
+----
+@startuml
+title RT-3: Capture Bookmark — Metadata Fetch Failure
+
+actor Owner
+participant Browser
+participant "Axum Router\n+ Auth" as Router
+participant "Leptos SSR\nShell" as Leptos
+participant "Server Fn:\nfetch_metadata" as FetchMeta
+participant "Target\nWebsite" as Target
+
+Owner -> Browser : Click bookmarklet
+Browser -> Router : GET /add?url=<url>&api_key=<key>
+Router -> Leptos : Render AddBookmarkForm
+Leptos -> FetchMeta : fetch_metadata(url)
+FetchMeta -> Target : GET <url>
+Target --> FetchMeta : Timeout / 4xx / 5xx
+FetchMeta -> FetchMeta : Return fallback:\ntitle = url, description = ""
+FetchMeta --> Leptos : (url, "")
+Leptos --> Browser : Form pre-filled\n(title = raw URL,\ndescription empty)
+Browser --> Owner : Form displayed
+@enduml
+----
+
+=== RT-4 — Search Bookmarks (search-as-you-type)
+
+[plantuml, rt-search, svg]
+----
+@startuml
+title RT-4: Search Bookmarks
+
+actor Owner
+participant "Browser\n(WASM SPA)" as Browser
+participant "Server Fn:\nsearch_bookmarks" as SearchFn
+participant "Persistence\n(FTS5)" as DB
+
+Owner -> Browser : Type "rust" in search box
+Browser -> Browser : Debounce timer starts\n(~300 ms)
+Browser -> SearchFn : search_bookmarks(query="rust", tag=None)
+SearchFn -> DB : FTS5 MATCH "rust"\nORDER BY rank
+DB --> SearchFn : Matching bookmarks
+SearchFn --> Browser : Vec<Bookmark>
+Browser --> Owner : List updates reactively\n(no page reload)
+
+Owner -> Browser : Clear search box
+Browser -> SearchFn : search_bookmarks(query="", tag=None)
+SearchFn -> DB : SELECT * ORDER BY\ncreated_at DESC
+DB --> SearchFn : All bookmarks
+SearchFn --> Browser : Vec<Bookmark>
+Browser --> Owner : Full list restored
+@enduml
+----
+
+=== RT-5 — Delete Bookmark
+
+[plantuml, rt-delete, svg]
+----
+@startuml
+title RT-5: Delete Bookmark
+
+actor Owner
+participant "Browser\n(WASM SPA)" as Browser
+participant "Server Fn:\ndelete_bookmark" as DeleteFn
+participant "Persistence" as DB
+
+Owner -> Browser : Click Delete on bookmark
+Browser --> Owner : Show confirmation prompt
+Owner -> Browser : Confirm deletion
+Browser -> DeleteFn : delete_bookmark(id)
+DeleteFn -> DB : DELETE FROM bookmarks\nWHERE id = ?
+DB --> DeleteFn : Rows affected (0 or 1)
+DeleteFn --> Browser : Ok(())
+Browser --> Owner : Entry removed\nfrom list reactively
+@enduml
+----
+
+=== RT-6 — Authentication (first request with API key)
+
+[plantuml, rt-auth, svg]
+----
+@startuml
+title RT-6: Authentication — API Key to Session Cookie
+
+actor Owner
+participant Browser
+participant "Auth\nMiddleware" as Auth
+
+Owner -> Browser : Navigate to /?api_key=<key>
+Browser -> Auth : GET /?api_key=<key>
+Auth -> Auth : Constant-time compare\napi_key vs API_KEY env var
+Auth --> Browser : 200 OK\nSet-Cookie: session=<token>
+Browser --> Owner : Page rendered\nCookie stored
+
+Owner -> Browser : Navigate to / (no query param)
+Browser -> Auth : GET /\nCookie: session=<token>
+Auth -> Auth : Validate session cookie
+Auth --> Browser : 200 OK
+Browser --> Owner : Page rendered
+@enduml
+----

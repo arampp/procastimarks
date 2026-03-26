@@ -8,12 +8,116 @@ ifndef::imagesdir[:imagesdir: ../../images]
 
 :toc:
 
-
-
 [[section-technical-risks]]
 == Risks and Technical Debts
 
+=== Risks
 
+[cols="1,1,1,3,3", options="header"]
+|===
+|ID |Risk |Likelihood |Impact |Mitigation
 
+|R-1
+|Leptos API instability
+|Medium
+|High
+|Leptos is a relatively young framework.
+Breaking changes between minor versions are possible and have occurred historically.
+_Mitigation_: Pin exact crate versions in `Cargo.lock`.
+Review the Leptos changelog before upgrading.
+Accept that some rework may be needed after major version bumps.
 
+|R-2
+|WASM bundle size too large for acceptable load time
+|Low
+|Medium
+|Leptos WASM bundles can be several hundred kilobytes.
+On a slow connection the initial page load may feel slow.
+_Mitigation_: Enable `wasm-opt` in the release build.
+Use Leptos SSR so the page is usable before WASM hydration completes.
+Measure bundle size after the first working build.
 
+|R-3
+|SQLite write contention
+|Low
+|Low
+|SQLite uses file-level locking.
+A concurrent write (e.g., two browser tabs submitting at the same moment) will
+cause one write to block briefly.
+_Mitigation_: Enable WAL mode (`PRAGMA journal_mode=WAL`).
+For a single-user tool this risk is negligible in practice.
+
+|R-4
+|Metadata fetch blocked or misused
+|Medium
+|Low
+|The server-side fetch to the target website exposes the server's IP to that site.
+A malicious URL could be used to probe internal network resources (SSRF).
+_Mitigation_: Validate that the URL scheme is `http` or `https` and that the
+host resolves to a public IP before issuing the fetch.
+Enforce a short request timeout (e.g., 5 seconds).
+
+|R-5
+|API key exposure via browser history
+|Medium
+|Medium
+|The `api_key` query parameter appears in the browser's URL bar and history when
+the bookmarklet is used.
+_Mitigation_: This trade-off is explicitly accepted (ADR-5).
+The owner should use the application only on trusted devices.
+The session cookie means the key appears in the URL only once per browser session.
+
+|R-6
+|Data loss on Docker volume deletion
+|Low
+|High
+|Running `docker compose down -v` or manually deleting the named volume destroys
+all bookmarks.
+_Mitigation_: Document the correct shutdown procedure (`docker compose down`
+without `-v`).
+The operator is responsible for volume-level backups via their server
+infrastructure.
+|===
+
+=== Technical Debts
+
+[cols="1,1,2", options="header"]
+|===
+|ID |Area |Description
+
+|TD-1
+|Edit bookmark (post-MVP)
+|The MVP does not support editing an existing bookmark's title, description, tags,
+or comment.
+The domain layer and persistence layer must be extended with an `update_bookmark`
+operation.
+The UI requires a new edit form or in-place editing on the list view.
+
+|TD-2
+|Browser bookmarks import (post-MVP)
+|There is no mechanism to bulk-import bookmarks from a browser's exported HTML
+file or from other bookmark managers.
+A future import feature would need an HTML parser (Netscape Bookmark File Format)
+and a batch insert path.
+
+|TD-3
+|In-app data export (post-MVP)
+|The application has no endpoint to download the bookmark collection as JSON, CSV,
+or the SQLite file itself.
+A `/export` endpoint returning JSON would make migrations and manual backups easier.
+
+|TD-4
+|Session store in memory
+|Session tokens are stored in an in-process `HashMap`.
+Restarting the container invalidates all active sessions, requiring the owner to
+present the API key again.
+A persistent session store (e.g., a `sessions` table in SQLite) would survive
+restarts, but adds complexity.
+Accepted for the MVP.
+
+|TD-5
+|No database migrations framework
+|Schema changes in subsequent versions require manual migration SQL.
+A crate such as `sqlx-migrate` or `refinery` should be adopted before the
+schema stabilises.
+|===

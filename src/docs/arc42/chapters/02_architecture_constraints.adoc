@@ -8,12 +8,88 @@ ifndef::imagesdir[:imagesdir: ../../images]
 
 :toc:
 
-
-
 [[section-architecture-constraints]]
 == Architecture Constraints
 
+=== Technical Constraints
 
+[cols="1,1,3", options="header"]
+|===
+|ID |Constraint |Rationale
 
+|TC-1
+|All application code must be written in Rust.
+|The project is a proof of concept for full-stack Rust.
+Minimal vanilla JavaScript (< 50 lines) is permitted only for browser-specific
+behaviour that cannot be expressed in WebAssembly.
 
+|TC-2
+|The HTTP transport layer must use the Axum framework.
+|Axum is the chosen backend framework.  No other HTTP server library may be
+introduced.
 
+|TC-3
+|The frontend must be a Leptos single-page application compiled to WebAssembly.
+Data access must use Leptos server functions; no manually designed REST API.
+|Leptos server functions provide a type-safe, zero-boilerplate data layer that
+removes the need for a separate API contract.
+
+|TC-4
+|Persistence must use SQLite with the FTS5 extension.
+One database file per deployment.
+|SQLite requires no separate server process, is trivial to back up, and FTS5
+provides sufficient full-text search for thousands of bookmarks.
+
+|TC-5
+|The application must be packaged as a single Docker image and orchestrated with
+Docker Compose.
+|Self-hosting on a private server with a single `docker compose up` command.
+
+|TC-6
+|The Docker image must mount the SQLite file on a named volume.
+No application-level backup mechanism is provided.
+|Data persistence across container restarts is handled by the volume.
+Backup is delegated to the server operator's existing infrastructure.
+|===
+
+=== Organisational Constraints
+
+[cols="1,1,3", options="header"]
+|===
+|ID |Constraint |Rationale
+
+|OC-1
+|The MVP must be completable by a single developer in one weekend.
+|Personal project with no budget and a fixed time-box.
+
+|OC-2
+|Zero budget.  No paid services, no paid libraries, no paid hosting.
+|Personal project.
+
+|OC-3
+|Hosting is on a private, self-managed server.
+No cloud provider, no managed database, no CDN.
+|Privacy requirement: bookmarks must not be accessible to third parties.
+|===
+
+=== Convention Constraints
+
+[cols="1,1,3", options="header"]
+|===
+|ID |Constraint |Rationale
+
+|CC-1
+|The visual design must follow a vintage early-2000s web aesthetic
+(system fonts, muted colours, minimal decoration).
+This is a cosmetic constraint only; it does not affect architecture.
+|Owner preference.
+
+|CC-2
+|Commits must follow the Conventional Commits specification and reference an
+issue number.
+|Project conventions defined in `AGENTS.md`.
+
+|CC-3
+|Code must follow DRY, SOLID, KISS, and use Ubiquitous Language (DDD).
+|Project conventions defined in `AGENTS.md`.
+|===

@@ -8,22 +8,133 @@ ifndef::imagesdir[:imagesdir: ../../images]
 
 :toc:
 
-
-
 [[section-glossary]]
 == Glossary
 
-
-
-
-
-[cols="e,2e" options="header"]
+[cols="e,2e", options="header"]
 |===
 |Term |Definition
 
-|<Term-1>
-|<definition-1>
+|API Key
+|A long random string configured via the `API_KEY` environment variable.
+Embedded in the bookmarklet URL as a query parameter.
+Used to authenticate the owner on first access.
+See FR-6 and ADR-5.
 
-|<Term-2>
-|<definition-2>
+|Axum
+|An async Rust HTTP server framework built on `tokio` and `hyper`.
+Used as the HTTP transport layer in Procastimarks.
+
+|Bookmark
+|The core domain entity.  Represents a saved web page and consists of:
+`id`, `url`, `title`, `description`, `tags`, `comment`, `created_at`.
+
+|Bookmarklet
+|A small piece of JavaScript stored as a browser bookmark.
+When clicked, it opens a new tab pointing to the Procastimarks `/add` route
+with the current page's URL pre-populated as a query parameter.
+
+|C4 Model
+|A hierarchical software architecture visualisation method by Simon Brown.
+Four levels: System Context, Container, Component, Code.
+Used in this document for diagrams in Chapters 3, 5, and 7.
+
+|Content Table
+|A SQLite pattern for FTS5 where the FTS virtual table references an ordinary
+table as its source of truth, rather than storing its own copy of the text.
+Requires triggers to keep the FTS index synchronised.
+
+|CSR (Client-Side Rendering)
+|A Leptos mode in which the application is rendered entirely in the browser by
+the WASM module.  The server serves a minimal HTML shell and the WASM bundle.
+
+|Docker Compose
+|A tool for defining and running multi-container Docker applications via a
+`docker-compose.yml` file.
+Used to orchestrate the single Procastimarks container.
+
+|Domain Layer
+|The part of the application that contains business rules (tag normalisation,
+URL uniqueness, `Bookmark` entity) independent of HTTP and database concerns.
+
+|FTS5
+|Full-Text Search version 5.  A SQLite extension that provides fast,
+ranked full-text search over text columns.
+Used in Procastimarks to search bookmark title, description, comment, and tags.
+
+|Leptos
+|A Rust SPA framework that compiles to WebAssembly.
+Supports both CSR and SSR modes, and provides server functions for type-safe
+client-server data access.
+
+|Metadata Fetcher
+|The component responsible for issuing a server-side HTTP GET to a target URL
+and extracting the page `<title>` and `<meta name="description">` values.
+
+|Named Volume
+|A Docker volume identified by a name rather than a host path.
+Managed by the Docker engine.  Survives container recreation.
+Used to persist the SQLite database file.
+
+|Owner
+|The single user and operator of a Procastimarks instance.
+
+|Persistence Layer
+|The part of the application that manages all SQLite access via `rusqlite`,
+including schema creation, migrations, and FTS5 index management.
+
+|PlantUML
+|An open-source tool for generating diagrams from plain-text descriptions.
+Used in this document for C4 diagrams and sequence diagrams.
+
+|Reactive Signal
+|A Leptos primitive (`RwSignal<T>`) that notifies all dependent UI components
+when its value changes, enabling the SPA to update without page reloads.
+
+|rusqlite
+|A Rust crate providing bindings to the SQLite C library, optionally bundling
+SQLite so no system installation is required.
+
+|scraper
+|A Rust crate for parsing HTML using CSS selectors.
+Used by the Metadata Fetcher to extract title and description from the fetched
+page HTML.
+
+|Server Function
+|A Rust async function annotated with `#[server]` in Leptos.
+Leptos generates both the server-side HTTP handler and the client-side WASM
+call stub automatically, enabling type-safe remote procedure calls without
+a manually written API.
+
+|Session Cookie
+|An HTTP cookie set by the Auth Middleware after successful API key validation.
+Contains an opaque token that identifies a live session.
+Has `HttpOnly` and `SameSite=Strict` attributes.
+Valid for the lifetime of the browser session.
+
+|SPA (Single-Page Application)
+|A web application that loads once and updates the DOM reactively in response
+to user interactions, without triggering full page reloads.
+
+|SSR (Server-Side Rendering)
+|A Leptos mode in which the initial HTML is rendered on the server before being
+sent to the browser.  The WASM module then "hydrates" the page to make it
+interactive.
+
+|Tag
+|A user-supplied label applied to a bookmark.
+Stored in lowercase with surrounding whitespace removed.
+Used as the primary navigation and retrieval mechanism.
+
+|Target Website
+|The third-party web page whose URL the owner wishes to save as a bookmark.
+Procastimarks fetches its metadata server-side at capture time.
+
+|WAL (Write-Ahead Logging)
+|A SQLite journal mode that improves concurrent read/write performance.
+Enabled via `PRAGMA journal_mode=WAL`.
+
+|WASM (WebAssembly)
+|A binary instruction format that runs in modern web browsers at near-native
+speed.  The Leptos frontend is compiled from Rust to WASM.
 |===
