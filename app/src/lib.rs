@@ -17,28 +17,50 @@ pub mod persistence;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod routes;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod session;
+
 /// Construct the Axum [`axum::Router`] for the application.
 ///
-/// The `api_key` parameter is the expected API key read from the `API_KEY`
-/// environment variable.  When called from tests, it is injected via
-/// `std::env::set_var` before calling this function.
+/// Reads `API_KEY` from the environment at construction time.  Tests inject
+/// the key via `std::env::set_var` before calling this function.
 ///
 /// This function is the single composition root for the HTTP layer.
 /// Tests drive it directly via [`tower::ServiceExt::oneshot`] without
 /// spawning a process.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn create_router() -> axum::Router {
-    use axum::routing::get;
-    use axum::middleware as axum_middleware;
-    use leptos::prelude::*;
-    use leptos_axum::{generate_route_list, LeptosRoutes};
+    use middleware::auth::AppState;
     use std::sync::Arc;
 
-    // Read the API key from the environment.  Tests set this before calling
-    // `create_router()`; the server binary validates it in `main()`.
     let api_key: Arc<str> = std::env::var("API_KEY")
         .unwrap_or_default()
         .into();
+
+    let state = AppState {
+        api_key,
+        sessions: session::new_store(),
+    };
+
+    build_router(state)
+}
+
+/// Construct the router with an explicit [`middleware::auth::AppState`].
+///
+/// Exposed for testing: tests that must send two requests to the *same*
+/// session store construct an `AppState` themselves, call this function
+/// twice, and reuse the store between calls.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn create_router_with_state(state: middleware::auth::AppState) -> axum::Router {
+    build_router(state)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn build_router(state: middleware::auth::AppState) -> axum::Router {
+    use axum::middleware as axum_middleware;
+    use axum::routing::get;
+    use leptos::prelude::*;
+    use leptos_axum::{generate_route_list, LeptosRoutes};
 
     let conf = get_configuration(None).unwrap();
     let leptos_options = conf.leptos_options.clone();
@@ -56,7 +78,7 @@ pub fn create_router() -> axum::Router {
         .fallback(leptos_axum::file_and_error_handler(shell))
         // Authentication middleware — outermost layer, wraps every route (C-2).
         .layer(axum_middleware::from_fn_with_state(
-            api_key,
+            state,
             middleware::auth::require_auth,
         ))
         .with_state(leptos_options)
