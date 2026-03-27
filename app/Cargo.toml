@@ -25,6 +25,7 @@ tracing       = { workspace = true }
 # Server-only dependencies — excluded from the WASM build
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 axum              = { workspace = true }
+dotenvy           = { workspace = true }
 http              = { workspace = true }
 http-body-util    = { workspace = true }
 leptos_axum       = { workspace = true }

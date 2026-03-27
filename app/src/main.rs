@@ -10,6 +10,9 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // ── Load .env (ignored if absent — environment variables take precedence) ──
+    let _ = dotenvy::dotenv();
+
     // ── Logging ──────────────────────────────────────────────────────────────
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
