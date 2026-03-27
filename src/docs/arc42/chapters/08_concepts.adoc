@@ -8,28 +8,166 @@ ifndef::imagesdir[:imagesdir: ../../images]
 
 :toc:
 
-
-
 [[section-concepts]]
 == Cross-cutting Concepts
 
+=== Authentication and Session Management
 
+All HTTP routes except `GET /health` and `GET /pkg/*` require proof of identity.
+The mechanism is intentionally minimal for a single-user personal tool.
 
+Flow::
+. The client presents the `api_key` query parameter on the first request.
+. The Auth Middleware compares it to the `API_KEY` environment variable using a
+  constant-time string comparison (to prevent timing-based enumeration).
+. On success the middleware sets a `session` cookie with a server-generated opaque
+  token stored in memory.  The cookie has `HttpOnly`, `SameSite=Strict` attributes
+  and no explicit `Max-Age` (browser-session lifetime).
+. Subsequent requests within the same browser session present the cookie; the
+  `api_key` query parameter is not required again.
+. On any authentication failure the server returns HTTP 401 and renders a plain
+  error page.  No application data is exposed.
 
+Security trade-off accepted::
+The `api_key` value appears in the bookmarklet URL and is therefore visible in
+browser history and bookmarklet source.  This is accepted because the application
+is deployed on a private server accessed only by the owner on trusted devices.
+See ADR-5 for the decision record.
 
+=== Error Handling
 
-=== _<Concept 1>_
+The application distinguishes three error categories:
 
-_<explanation>_
+[cols="1,2,2", options="header"]
+|===
+|Category |Examples |Handling
 
+|User errors (4xx)
+|Duplicate URL, missing required field, invalid API key
+|Server functions return a typed `Err` variant.  The Leptos UI renders an inline
+error message adjacent to the relevant form field or at the top of the form.
+No panic; no log noise.
 
+|External failures (fetch errors)
+|Target website unreachable, timeout, non-200 status
+|`MetadataFetcher` catches all `reqwest` errors and returns a fallback value
+`(url.to_string(), String::new())`.  The error is logged at `WARN` level.
+The capture flow continues normally.
 
-=== _<Concept 2>_
+|Internal errors (5xx)
+|SQLite I/O error, constraint violation other than uniqueness, WASM panic
+|Propagated as `anyhow::Error` through server functions.  Leptos maps them to a
+generic "Something went wrong" message in the UI.  The full error is logged at
+`ERROR` level with the request ID.
+|===
 
-_<explanation>_
+=== Tag Normalisation
 
-...
+Tags are the primary retrieval signal and must be consistent regardless of how the
+owner enters them.
 
-=== _<Concept n>_
+Rules applied at write time (inside the `Domain` layer, before any DB write)::
+. Trim leading and trailing ASCII whitespace from each tag string.
+. Convert the remaining string to lowercase using Rust's `str::to_lowercase`.
+. Discard any tag that becomes empty after trimming.
+. Deduplicate tags within a single bookmark (preserve order of first occurrence).
 
-_<explanation>_
+These rules are applied in the `save_bookmark` server function before the
+`BookmarkRepository::insert` call, ensuring they cannot be bypassed.
+
+=== Full-Text Search
+
+SQLite FTS5 is the search engine for all bookmark text fields.
+
+Schema design::
+* A content table `bookmarks` holds the authoritative data.
+* A content-based FTS5 virtual table `bookmarks_fts` indexes
+  `title`, `description`, `comment`, and `tags`.
+* Three SQLite triggers (`bookmarks_ai`, `bookmarks_au`, `bookmarks_bd`) keep
+  the FTS index synchronised with the content table on every INSERT, UPDATE,
+  and DELETE.
+
+Query construction::
+* A non-empty search query is issued as an FTS5 `MATCH` query with BM25 ranking:
+  `SELECT … FROM bookmarks JOIN bookmarks_fts … WHERE bookmarks_fts MATCH ? ORDER BY rank`.
+* An active tag filter is added as an AND clause on the `tags` column of `bookmarks`.
+* An empty search query falls back to `SELECT * FROM bookmarks ORDER BY created_at DESC`.
+
+Autocomplete::
+Tag autocomplete queries the `bookmarks` table directly
+(`SELECT DISTINCT tag FROM bookmark_tags WHERE tag LIKE ?% ORDER BY tag`)
+rather than the FTS index, because prefix matching is more natural via `LIKE`
+for this use case.
+
+=== Reactive UI State
+
+The Leptos SPA manages four pieces of shared reactive state:
+
+[cols="1,1,2", options="header"]
+|===
+|Signal |Type |Description
+
+|`search_query`
+|`RwSignal<String>`
+|Current value of the search box.  Updated on every keystroke; debounced before
+triggering a server function call.
+
+|`active_tag`
+|`RwSignal<Option<String>>`
+|Currently selected tag filter.  `None` means no filter.
+
+|`bookmarks`
+|`RwSignal<Vec<Bookmark>>`
+|The currently visible list of bookmarks.  Updated by any server function that
+returns a new list.
+
+|`form_error`
+|`RwSignal<Option<String>>`
+|Error message for the add-bookmark form.  Set by `save_bookmark` on failure;
+cleared on successful save or navigation away.
+|===
+
+=== Logging and Observability
+
+Logging uses the `tracing` crate with the `tracing-subscriber` fmt layer
+writing structured JSON to stdout.  Docker captures stdout and makes it available
+via `docker logs`.
+
+Log levels::
+* `ERROR` — unrecoverable internal errors (SQLite I/O failures, unexpected panics).
+* `WARN` — recoverable external failures (metadata fetch failures).
+* `INFO` — lifecycle events (server start, port binding, graceful shutdown).
+* `DEBUG` — per-request details (method, path, status, latency) in development.
+
+No external logging or monitoring infrastructure is assumed.
+
+=== Configuration
+
+All runtime configuration is supplied via environment variables.
+The application reads them at startup and fails fast with a clear error message
+if a required variable is absent or empty.
+
+[cols="1,1,1,2", options="header"]
+|===
+|Variable |Required |Default |Description
+
+|`API_KEY`
+|Yes
+|—
+|The authentication secret embedded in the bookmarklet.
+
+|`DATABASE_URL`
+|Yes
+|—
+|Absolute path to the SQLite file.  Example: `/data/bookmarks.db`.
+
+|`BIND_ADDRESS`
+|No
+|`0.0.0.0:3000`
+|The address and port the Axum server binds to.
+
+|`RUST_LOG`
+|No
+|`info`
+|Log level filter passed to `tracing-subscriber`.
+|===

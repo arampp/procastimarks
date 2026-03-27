@@ -8,28 +8,192 @@ ifndef::imagesdir[:imagesdir: ../../images]
 
 :toc:
 
-
-
 [[section-quality-scenarios]]
 == Quality Requirements
 
-
-
-
-
-
-
 === Quality Requirements Overview
 
+The quality goals were established in Chapter 1.
+This chapter makes them measurable through concrete quality scenarios and maps
+them to the architectural decisions that satisfy them.
 
+[cols="1,1,2,2", options="header"]
+|===
+|ID |Quality Attribute |Description |Primary Architectural Lever
 
+|QR-1
+|Simplicity
+|Any single building block must be understandable and modifiable by the sole
+developer without reading any other building block first.
+|Single-binary deployment (ADR-4); server functions as data layer (ADR-3);
+SQLite with no external services (ADR-2).
 
+|QR-2
+|Retrievability
+|The owner can locate any bookmark by topic within a few seconds, even from a
+collection of thousands, using only a vague recollection of the subject matter.
+|FTS5 full-text search over all fields (ADR-2); tag normalisation (ADR-6);
+tag-first navigation.
 
+|QR-3
+|Deployability
+|The entire system starts with a single `docker compose up` command and requires
+no post-install configuration beyond setting two environment variables.
+|Single Docker container with named volume (ADR-4); fail-fast startup on missing
+environment variables.
+
+|QR-4
+|Rust Demonstrability
+|All non-trivial application logic is written in Rust.
+The frontend is compiled to WebAssembly from Rust source.
+|Leptos + Axum (ADR-1).
+
+|QR-5
+|Data Safety
+|Bookmark data is not lost on container restart or image upgrade.
+|Named Docker volume for the SQLite file (ADR-4).
+
+|QR-6
+|Security (access control)
+|No bookmark data is accessible to any client that does not present the correct
+API key or a valid session cookie derived from it.
+|API key auth middleware on all routes (ADR-5); constant-time key comparison.
+|===
 
 === Quality Scenarios
 
+==== QS-1 — Capture with No Friction
 
+[cols="1,3", options="header"]
+|===
+|Attribute |Detail
 
+|Quality Attribute
+|Simplicity / Usability
 
+|Stimulus
+|The owner is on a target web page and clicks the bookmarklet.
 
+|Response
+|A new tab opens with the add-bookmark form pre-filled with the URL, title,
+and description.  The owner adds tags and submits without navigating away from
+the original page in the previous tab.
 
+|Measurable Outcome
+|The time from bookmarklet click to form ready (including server-side metadata
+fetch) is below 3 seconds on a typical home internet connection.
+|===
+
+==== QS-2 — Retrieve by Topic
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Detail
+
+|Quality Attribute
+|Retrievability
+
+|Stimulus
+|The owner remembers only that they saved something about "async Rust" but
+cannot recall the URL or exact title.
+
+|Response
+|The owner types "async" in the search box.  The list immediately narrows to
+bookmarks containing "async" in any field.  The owner finds the correct bookmark
+within the first page of results.
+
+|Measurable Outcome
+|FTS5 returns results in under 200 ms for a collection of 5 000 bookmarks on
+the target server hardware.
+|===
+
+==== QS-3 — Zero-Downtime Data Survival
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Detail
+
+|Quality Attribute
+|Data Safety / Deployability
+
+|Stimulus
+|The operator runs `docker compose pull && docker compose up -d` to upgrade to
+a new image version.
+
+|Response
+|The container is recreated with the new image.
+The named volume is remounted.
+The application starts and serves all previously saved bookmarks without any
+manual intervention.
+
+|Measurable Outcome
+|All bookmarks present before the upgrade are present and searchable after the
+upgrade.  Downtime is limited to the container restart time (< 10 seconds).
+|===
+
+==== QS-4 — Rejected Unauthenticated Request
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Detail
+
+|Quality Attribute
+|Security
+
+|Stimulus
+|A client sends a GET request to `/` with no `api_key` query parameter and no
+session cookie.
+
+|Response
+|The server returns HTTP 401 and an error page.
+No bookmark data is included in the response body.
+
+|Measurable Outcome
+|100% of requests without valid credentials are rejected before any
+application data is read from SQLite.
+|===
+
+==== QS-5 — Duplicate URL Prevented
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Detail
+
+|Quality Attribute
+|Data Integrity / Retrievability
+
+|Stimulus
+|The owner attempts to save a URL that is already in the database.
+
+|Response
+|The server rejects the save and returns the error message
+"This URL is already saved." on the add-bookmark form.
+No duplicate record is created.
+
+|Measurable Outcome
+|The `bookmarks` table has a UNIQUE constraint on the `url` column.
+The `save_bookmark` server function checks the constraint and surfaces a
+user-friendly error before any INSERT is attempted.
+|===
+
+==== QS-6 — Single-Command Deployment
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Detail
+
+|Quality Attribute
+|Deployability
+
+|Stimulus
+|A developer clones the repository on a fresh Linux server with Docker installed
+and sets the two required environment variables.
+
+|Response
+|Running `docker compose up -d` builds the image (or pulls it if pre-built) and
+starts the application.  The health check endpoint `GET /health` returns HTTP 200.
+
+|Measurable Outcome
+|No manual steps are required beyond setting `API_KEY` and `DATABASE_URL` in a
+`.env` file and running `docker compose up -d`.
+|===

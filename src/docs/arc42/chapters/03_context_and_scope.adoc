@@ -8,34 +8,106 @@ ifndef::imagesdir[:imagesdir: ../../images]
 
 :toc:
 
-
-
 [[section-context-and-scope]]
 == Context and Scope
 
-
-
-
-
-
 === Business Context
 
+Procastimarks sits between the owner's browser and the wider web.
+The owner interacts with the system through two surfaces: the bookmarklet
+(one-click capture) and the web application (browse, search, delete).
+The system reaches out to third-party websites only to fetch page metadata at
+capture time.
 
+[plantuml, c4-system-context, svg]
+----
+@startuml
+!include <C4/C4_Context>
 
+LAYOUT_WITH_LEGEND()
 
+title System Context — Procastimarks
 
-**<Diagram or Table>**
+Person(owner, "Owner", "The single user of the\nself-hosted instance.\nBrowses the web and\nmanages bookmarks.")
 
-**<optionally: Explanation of external domain interfaces>**
+System(procastimarks, "Procastimarks", "Self-hosted bookmark manager.\nCaptures, stores, and retrieves\nweb page bookmarks.")
+
+System_Ext(browser, "Web Browser", "Executes the bookmarklet\nJavaScript and renders\nthe Leptos SPA.")
+
+System_Ext(targetWeb, "Target Website", "Third-party web page\nwhose URL is being saved.\nProvides title and\nmeta description.")
+
+Rel(owner, browser, "Uses", "HTTP/HTTPS")
+Rel(browser, procastimarks, "Opens /add?url=...&api_key=...\nand navigates the SPA", "HTTPS")
+Rel(procastimarks, targetWeb, "Fetches page metadata\nat capture time", "HTTPS (server-side)")
+Rel(owner, procastimarks, "Browses, searches,\nand deletes bookmarks", "HTTPS (via browser)")
+@enduml
+----
+
+[cols="1,1,2", options="header"]
+|===
+|Neighbour |Direction |Data Exchanged
+
+|Web Browser
+|Bidirectional
+|The browser delivers HTTP requests from the owner (navigation, form submissions,
+Leptos reactive updates via server functions) and renders the HTML/WASM responses.
+
+|Target Website
+|Outbound only
+|Procastimarks sends an HTTP GET request to the target URL and reads the HTML
+response to extract `<title>` and `<meta name="description">` values.
+No data is sent to the target website.
+|===
 
 === Technical Context
 
+[plantuml, c4-system-context-technical, svg]
+----
+@startuml
+!include <C4/C4_Context>
 
+LAYOUT_WITH_LEGEND()
 
+title Technical Context — Procastimarks
 
+Person(owner, "Owner", "Uses a desktop browser.")
 
-**<Diagram or Table>**
+System_Boundary(server, "Private Server (Docker host)") {
+  System(app, "Procastimarks App", "Leptos SSR + Axum.\nSingle Docker container.\nListens on TCP :3000.")
+  SystemDb(sqlite, "SQLite Database", "Single .db file on a\nnamed Docker volume.")
+}
 
-**<optionally: Explanation of technical interfaces>**
+System_Ext(reverseProxy, "Reverse Proxy\n(operator-managed)", "nginx / Caddy / Cloudflare.\nTerminates TLS.\nNot part of this system.")
 
-**<Mapping Input/Output to Channels>**
+System_Ext(targetWeb, "Target Website", "Any public web server.")
+
+Rel(owner, reverseProxy, "HTTPS :443")
+Rel(reverseProxy, app, "HTTP :3000")
+Rel(app, sqlite, "SQL (rusqlite)", "File I/O")
+Rel(app, targetWeb, "HTTP/HTTPS GET\n(metadata fetch)", "TCP")
+@enduml
+----
+
+[cols="1,2,2", options="header"]
+|===
+|Channel |Protocol / Technology |Notes
+
+|Owner → Reverse Proxy
+|HTTPS (TLS 1.2+)
+|TLS termination is the operator's responsibility.
+The application does not handle TLS directly.
+
+|Reverse Proxy → App
+|HTTP/1.1 on TCP port 3000
+|Plain HTTP inside the Docker network.
+
+|App → SQLite
+|File I/O via `rusqlite` crate
+|The database file is at the path configured by the `DATABASE_URL` environment
+variable, mounted from a named Docker volume.
+
+|App → Target Website
+|HTTP/HTTPS GET via `reqwest` crate
+|Fire-and-forget metadata fetch at bookmark capture time.
+Failures are non-fatal; the title falls back to the raw URL.
+|===

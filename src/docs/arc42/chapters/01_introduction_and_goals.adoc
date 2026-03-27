@@ -8,36 +8,101 @@ ifndef::imagesdir[:imagesdir: ../../images]
 
 :toc:
 
-
-
 [[section-introduction-and-goals]]
 == Introduction and Goals
 
+Procastimarks is a single-user, self-hosted bookmark manager built entirely in Rust.
+It solves the problem of URL discovery without time: when the owner finds an interesting
+web page but cannot read it immediately, they capture it in one browser action and
+retrieve it later by topic.
 
-
-
+The project is simultaneously a proof of concept that a full-stack web application
+can be written solely in the Rust programming language using Leptos (WASM frontend)
+and Axum (HTTP transport).
 
 === Requirements Overview
 
+The following table summarises the top-level functional requirements.
+Full detail is in `src/docs/specs/prd.adoc`.
 
+[cols="1,1,3", options="header"]
+|===
+|ID |Priority |Requirement
 
+|FR-1
+|Must
+|Capture a bookmark via a one-click browser bookmarklet that opens a pre-filled
+add-bookmark form.  The application fetches the page title and description
+server-side.
 
+|FR-2
+|Must
+|Display all bookmarks in reverse-chronological order on the main list view,
+with title, description excerpt, tags, and creation date.
+
+|FR-3
+|Must
+|Search all bookmark fields (title, description, comment, tags) with a unified
+search-as-you-type box powered by SQLite FTS5.
+
+|FR-4
+|Must
+|Provide tag autocomplete on the add-bookmark form.  Tags are stored lowercased
+and trimmed.
+
+|FR-5
+|Must
+|Delete a bookmark with a mandatory confirmation step.
+
+|FR-6
+|Must
+|Protect all routes with a single API key.  A valid key sets a session cookie for
+subsequent requests.  A public `/health` endpoint requires no authentication.
+|===
 
 === Quality Goals
 
+[cols="1,1,3", options="header"]
+|===
+|Priority |Quality Attribute |Motivation
 
+|1
+|Simplicity
+|The codebase, architecture, and UI must remain as simple as possible.
+A single developer must be able to understand and modify every part in one sitting.
+No feature or abstraction is added unless it directly serves a stated requirement.
 
+|2
+|Retrievability
+|The primary success criterion is that the owner can find any saved bookmark by
+topic within a few seconds.  Search and tag filtering must work reliably for
+collections up to a few thousand items.
 
+|3
+|Deployability
+|The entire system must start with a single `docker compose up` command on a
+private server.  No external services, no cloud dependencies.
+
+|4
+|Rust Demonstrability
+|All application logic must be written in Rust.  The frontend is compiled to
+WebAssembly.  Minimal vanilla JavaScript glue (< 50 lines) is acceptable for
+browser-specific behaviour that WASM cannot express.
+|===
 
 === Stakeholders
 
-
-
-
-
-[options="header",cols="1,2,2"]
+[options="header", cols="1,2,3"]
 |===
-|Role/Name|Contact|Expectations
-| _<Role-1>_ | _<Contact-1>_ | _<Expectation-1>_
-| _<Role-2>_ | _<Contact-2>_ | _<Expectation-2>_
+|Role |Contact |Expectations
+
+|Owner / Operator
+|The single user of the self-hosted instance
+|Captures bookmarks with minimal friction, finds them reliably by topic, and
+maintains the deployment on a private server without operational overhead.
+
+|Developer
+|The author of the project
+|Produces a working MVP in one weekend.  Uses the project as a learning vehicle
+for full-stack Rust (Leptos + Axum + SQLite).
 |===
