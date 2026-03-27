@@ -46,6 +46,9 @@ tower-http = { version = "0.5", features = ["fs"] }
 # Constant-time comparison (ATAM C-1: prevents timing attacks on API key)
 subtle = { version = "2" }
 
+# Cryptographically random session token generation (US-5)
+uuid = { version = "1", features = ["v4"] }
+
 # HTTP types (shared between axum and leptos tests)
 http = { version = "1" }
 http-body-util = { version = "0.1" }

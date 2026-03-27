@@ -37,6 +37,7 @@ tokio             = { workspace = true }
 tower             = { workspace = true }
 tower-http        = { workspace = true }
 tracing-subscriber = { workspace = true }
+uuid              = { workspace = true }
 
 # ─── Dev dependencies ────────────────────────────────────────────────────────
 [dev-dependencies]
