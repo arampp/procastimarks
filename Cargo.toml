@@ -43,6 +43,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tower = { version = "0.5" }
 tower-http = { version = "0.5", features = ["fs"] }
 
+# Constant-time comparison (ATAM C-1: prevents timing attacks on API key)
+subtle = { version = "2" }
+
 # HTTP types (shared between axum and leptos tests)
 http = { version = "1" }
 http-body-util = { version = "0.1" }

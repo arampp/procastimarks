@@ -32,6 +32,7 @@ leptos_axum       = { workspace = true }
 reqwest           = { workspace = true }
 rusqlite          = { workspace = true }
 scraper           = { workspace = true }
+subtle            = { workspace = true }
 tokio             = { workspace = true }
 tower             = { workspace = true }
 tower-http        = { workspace = true }
