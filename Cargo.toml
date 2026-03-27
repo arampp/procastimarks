@@ -28,6 +28,9 @@ scraper = { version = "0.22" }
 anyhow = { version = "1" }
 thiserror = { version = "2" }
 
+# .env file loading (dev convenience)
+dotenvy = { version = "0.15" }
+
 # Serialisation
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
