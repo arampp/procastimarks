@@ -1,0 +1,615 @@
+= ATAM Review: Procastimarks
+:doctype: article
+:toc: left
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:source-highlighter: rouge
+:revdate: 2026-03-26
+:revnumber: 1.0
+:revremark: Initial review
+
+== Purpose and Scope
+
+This document records the Architecture Trade-off Analysis Method (ATAM) review
+of the Procastimarks architecture as specified in the arc42 document
+(`src/docs/arc42/`).
+
+The review assesses whether the architectural decisions support the four quality
+goals established in Chapter 1, identifies trade-offs, and surfaces risks that
+may affect those goals.  It does not evaluate the correctness of any
+implementation, as no implementation exists at the time of this review.
+
+The review is conducted by the architect/developer as a structured
+self-assessment.  The findings are binding on the implementation: a decision
+listed here as a risk must be addressed before the code that realises it is
+committed.
+
+=== Quality Goals Under Review
+
+The four quality goals, in priority order, are:
+
+[cols="1,1,3", options="header"]
+|===
+|Priority |Attribute |Definition
+
+|1
+|Simplicity
+|Any single building block is understandable and modifiable by the sole developer
+without reading any other building block first.  No abstraction is added unless
+it directly serves a stated requirement.
+
+|2
+|Retrievability
+|The owner can locate any saved bookmark by topic within a few seconds, even
+from a collection of thousands, using only a vague recollection of the subject.
+
+|3
+|Deployability
+|The entire system starts with `docker compose up` on a private server.
+No external services, no cloud dependencies, no post-install configuration
+beyond two environment variables.
+
+|4
+|Rust Demonstrability
+|All non-trivial application logic is written in Rust.  The frontend is compiled
+to WebAssembly from Rust source.
+|===
+
+== ATAM Artefacts
+
+=== Utility Tree
+
+The utility tree translates the quality goals into concrete, measurable
+scenarios and assigns each an importance/difficulty rating.
+
+Importance: H (High), M (Medium), L (Low) +
+Difficulty: H (Hard), M (Medium), L (Low)
+
+[cols="1,2,3,1,1", options="header"]
+|===
+|ID |Quality Attribute |Scenario |Importance |Difficulty
+
+|U-1
+|Simplicity
+|A developer new to Leptos can understand the add-bookmark flow end-to-end
+(bookmarklet → server function → domain → SQLite) by reading no more than four
+source files.
+|H |M
+
+|U-2
+|Simplicity
+|Adding a new server function (e.g., export bookmarks) requires changes to
+exactly one layer and no modifications to any middleware, route table, or
+serialisation schema.
+|H |L
+
+|U-3
+|Retrievability
+|Searching "async rust" in a collection of 5 000 bookmarks returns ranked
+results in under 200 ms on commodity server hardware.
+|H |L
+
+|U-4
+|Retrievability
+|Clicking a tag in the list view immediately filters to all bookmarks with that
+tag without a page reload.
+|H |L
+
+|U-5
+|Retrievability
+|The FTS5 index remains consistent with the bookmarks table after every insert
+and delete operation.
+|H |M
+
+|U-6
+|Deployability
+|A developer clones the repo, sets `API_KEY` and `DATABASE_URL` in `.env`, and
+runs `docker compose up -d`.  The `/health` endpoint returns HTTP 200 within
+30 seconds.
+|H |L
+
+|U-7
+|Deployability
+|Running `docker compose pull && docker compose up -d` upgrades the application
+to a new image while preserving all existing bookmarks.
+|H |L
+
+|U-8
+|Deployability
+|A `docker compose down` followed by `docker compose up -d` (without `-v`)
+preserves all data.
+|H |L
+
+|U-9
+|Rust Demonstrability
+|The compiled WASM bundle contains all UI logic with no TypeScript or compiled
+JavaScript dependencies beyond any minimal vanilla JS glue (< 50 lines).
+|M |M
+
+|U-10
+|Security (supporting QR-6)
+|A GET to `/` with no API key and no session cookie receives HTTP 401 before any
+SQLite read is performed.
+|H |L
+
+|U-11
+|Data Integrity (supporting U-5)
+|Attempting to save a URL already in the database returns a user-friendly error;
+no duplicate row is created.
+|H |L
+|===
+
+=== Architectural Approaches
+
+The following table maps each major architectural approach to the quality
+attributes it addresses.
+
+[cols="1,2,3", options="header"]
+|===
+|ID |Approach |Quality Attributes Addressed
+
+|AP-1
+|Leptos SPA compiled to WASM, using server functions for all data I/O
+|Rust Demonstrability, Simplicity (no manually written API contract)
+
+|AP-2
+|Axum as HTTP transport with a single auth middleware on all routes
+|Security, Simplicity (auth is one place, not scattered across handlers)
+
+|AP-3
+|SQLite with FTS5 content table kept in sync by three triggers
+|Retrievability, Data Integrity, Deployability (no external search service)
+
+|AP-4
+|Single Docker image (multi-stage build) + named volume + Docker Compose
+|Deployability, Data Safety
+
+|AP-5
+|Tag normalisation (lowercase + trim) in the domain layer at write time
+|Retrievability, Simplicity (no case-handling in query code)
+
+|AP-6
+|API key in environment variable; session cookie set on first valid request
+|Security, Simplicity (no user database, no password hashing)
+
+|AP-7
+|In-memory session store (`HashMap` in process)
+|Simplicity (accepted trade-off; see TD-4)
+|===
+
+== Trade-off Analysis
+
+=== AP-1 — Leptos + WASM + Server Functions
+
+==== Sensitivity Points
+
+* *Compile time* — The Rust-to-WASM build pipeline is significantly slower than
+  a JavaScript frontend build.  A full clean build may take several minutes on
+  developer hardware.  This affects the inner development loop.
+* *WASM bundle size* — A Leptos WASM bundle is typically 300–600 KB (compressed).
+  On a slow connection, initial page load (before hydration) may be perceptible.
+  Leptos SSR mode mitigates this by serving a pre-rendered HTML page; the WASM
+  bundle then hydrates the live DOM.
+
+==== Trade-offs
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Trade-off
+
+|Rust Demonstrability (+ )
+|All UI logic is Rust.  The type system is enforced from the component down to
+the SQLite query.  This directly satisfies QR-4.
+
+|Simplicity (+ )
+|Server functions eliminate the REST API layer.  A new data operation is a single
+annotated Rust function.  No route registration, no serialisation schema.
+
+|Simplicity (− )
+|The developer must understand the Leptos reactive graph model (signals, derived
+signals, resources) before making UI changes.  This is a non-trivial upfront cost
+not present in a server-rendered HTML approach.
+
+|Compile Time (− )
+|The `cargo-leptos` build compiles for two targets (native + WASM).  The inner
+loop is measurably slower than TypeScript.  This is a development experience cost,
+not a runtime cost.
+
+|Ecosystem Maturity (− )
+|Leptos is at version 0.x.  Breaking changes between minor versions have occurred
+(R-1).  Version pinning via `Cargo.lock` is the only mitigation.
+|===
+
+==== Verdict: Accept
+
+The trade-offs are acceptable given the explicit Rust Demonstrability goal.
+The slow compile time is a known cost.  The SSR mode adequately addresses the
+WASM size concern.
+
+---
+
+=== AP-2 — Axum Auth Middleware
+
+==== Sensitivity Points
+
+* The middleware must run before any handler that reads bookmark data.
+  If a new route is added without being covered by the middleware, data is exposed
+  without authentication.
+* The constant-time comparison function must be used for key comparison.
+  A timing-attack-vulnerable string comparison (`==`) would weaken the scheme.
+
+==== Trade-offs
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Trade-off
+
+|Security (+ )
+|Auth is enforced in one place (the middleware), not in every handler.  A new
+server function is automatically protected.
+
+|Simplicity (+ )
+|No login page, no user table, no password hashing.  The API key is one string
+in an environment variable.
+
+|Security (− )
+|The API key appears as a query parameter in the bookmarklet URL and therefore
+in browser history.  This is the accepted risk R-5.  The session cookie reduces
+the frequency of exposure to once per browser session.
+
+|Security (− )
+|If the key is compromised, the only remediation is to change `API_KEY` and
+restart the container.  There is no per-session revocation and no multi-factor
+option.  Accepted for a single-user personal tool.
+|===
+
+==== Verdict: Accept with Conditions
+
+The scheme is adequate for the stated threat model (trusted personal device,
+self-hosted, no shared accounts).  Two implementation constraints are mandatory:
+
+1. Key comparison **must** use a constant-time equality function (e.g.,
+   `subtle::ConstantTimeEq` or equivalent).
+2. The auth middleware **must** be registered on the Axum router at the outermost
+   layer, before any bookmark-data routes, to guarantee coverage.
+
+---
+
+=== AP-3 — SQLite FTS5 with Content Table and Triggers
+
+==== Sensitivity Points
+
+* *Trigger correctness* — The three DML triggers (`bookmarks_ai`, `bookmarks_au`,
+  `bookmarks_bd`) are the only mechanism that keeps the FTS5 index consistent
+  with the `bookmarks` table.  A missing or incorrect trigger silently produces
+  stale search results without any error.
+* *Content table semantics* — The FTS5 content table mode does not store the
+  text itself; it relies on the triggers to keep the index current.  A direct
+  `INSERT` or `UPDATE` on `bookmarks` that bypasses the application (e.g.,
+  a manual SQLite shell command) will not update the index unless the triggers
+  fire.
+* *WAL mode* — Without WAL mode, a concurrent write blocks all other readers and
+  writers.  For a single-user tool this is low risk but should still be enabled.
+
+==== Trade-offs
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Trade-off
+
+|Retrievability (+ )
+|FTS5 ranked search across all fields is fast (< 200 ms for thousands of records)
+and requires no external service.  Satisfies QS-2 directly.
+
+|Deployability (+ )
+|No separate search service container.  The search index is inside the SQLite
+file, which lives on the named volume.  Backup and restore are a single file copy.
+
+|Simplicity (+ )
+|FTS5 is built into SQLite.  No additional crate, no external process, no schema
+migration to a separate store.
+
+|Data Integrity (− )
+|Three triggers must be written correctly and tested explicitly.  If any trigger
+is missing or contains a bug, search results become silently incorrect.
+
+|Maintainability (− )
+|Schema changes to the `bookmarks` table require corresponding changes to the FTS5
+virtual table definition and all three triggers.  Without a migrations framework
+(TD-5), this is a manual and error-prone process.
+|===
+
+==== Verdict: Accept with Conditions
+
+FTS5 is the right choice.  Two implementation constraints are mandatory:
+
+1. The three triggers **must** be created unconditionally in the schema
+   initialisation SQL that runs at startup, using `CREATE TRIGGER IF NOT EXISTS`.
+2. An integration test **must** verify that after an insert, an update, and a
+   delete on `bookmarks`, the FTS5 index returns the correct results.
+
+---
+
+=== AP-4 — Single Docker Image + Named Volume
+
+==== Sensitivity Points
+
+* *Volume deletion* — `docker compose down -v` destroys the named volume and all
+  data with it (R-6).  There is no application-level protection against this.
+* *No migrations framework* — Schema initialisation SQL is applied once at first
+  start.  A subsequent version of the application with a different schema has no
+  automated upgrade path (TD-5).
+* *Multi-stage build time* — The WASM compilation step in the Docker build is
+  slow.  CI/CD pipelines must cache the Cargo registry and the WASM compilation
+  artefacts.
+
+==== Trade-offs
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Trade-off
+
+|Deployability (+ )
+|`docker compose up -d` is the entire deployment procedure.  The named volume
+survives image upgrades.  Satisfies QS-6 and QS-3 directly.
+
+|Data Safety (+ )
+|As long as `-v` is not passed to `docker compose down`, the SQLite file on the
+volume is safe across container recreation and image upgrades.
+
+|Deployability (− )
+|Docker must be installed on the server.  The initial build requires the Rust
+toolchain with the WASM target, which adds setup time for a fresh environment.
+The pre-built image (if published) eliminates this cost.
+
+|Upgrades (− )
+|Without a migrations framework, a schema-altering version bump requires the
+operator to run migration SQL manually before starting the new container.  This
+must be prominently documented in the release notes for any such version.
+|===
+
+==== Verdict: Accept
+
+The trade-offs are consistent with the single-user, self-hosted target.  The
+absence of a migrations framework is accepted as TD-5 for the MVP with the
+expectation that `refinery` or `sqlx-migrate` is adopted before the schema
+changes post-MVP.
+
+---
+
+=== AP-5 — Tag Normalisation in the Domain Layer
+
+==== Sensitivity Points
+
+* Normalisation must happen inside the domain layer, not the UI layer.
+  If the UI skips normalisation and calls the server function with un-normalised
+  tags, the constraint must still be enforced server-side.
+* The normalisation rule (lowercase + trim) must be applied consistently to both
+  the tags stored on a bookmark and the prefix used in autocomplete queries.
+  Inconsistency would cause autocomplete to miss existing tags.
+
+==== Trade-offs
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Trade-off
+
+|Retrievability (+ )
+|Tag matching and autocomplete are case-insensitive by construction.  No runtime
+UPPER/LOWER in queries.
+
+|Simplicity (+ )
+|Query code contains no case-handling.  The domain layer enforces the invariant.
+
+|Usability (− )
+|The owner cannot use mixed-case tags.  "JavaScript" is stored as "javascript".
+Accepted as per ADR-6.
+|===
+
+==== Verdict: Accept
+
+The rule is correct and consistently placed.  No conditions.
+
+---
+
+=== AP-6 — API Key + Session Cookie Auth
+
+See AP-2 above.  This approach is analysed together with the Axum middleware.
+
+---
+
+=== AP-7 — In-Memory Session Store
+
+==== Sensitivity Points
+
+* All sessions are lost on container restart.  The owner must re-authenticate
+  by visiting a URL containing the API key.  This is inconvenient but not a
+  security risk.
+* The `HashMap` holding sessions must be shared across Axum handlers.  It must
+  be wrapped in `Arc<Mutex<...>>` or `Arc<RwLock<...>>` to be thread-safe.
+  A missing synchronisation primitive causes data races or panics.
+
+==== Trade-offs
+
+[cols="1,3", options="header"]
+|===
+|Attribute |Trade-off
+
+|Simplicity (+ )
+|No `sessions` table, no session expiry query, no migration.
+
+|Reliability (− )
+|Container restart invalidates sessions.  For a personal tool used on one device
+this is minor friction.  Accepted as TD-4.
+
+|Correctness (risk)
+|Thread-safety of the shared map is an implementation concern.  Documented as a
+mandatory condition below.
+|===
+
+==== Verdict: Accept with Conditions
+
+The in-memory store is adequate for the MVP.  One implementation constraint is
+mandatory:
+
+1. The session store **must** be wrapped in `Arc<RwLock<HashMap<...>>>`.
+   Handlers that only read sessions use `read()` locks; the middleware that
+   inserts sessions uses `write()` locks.
+
+== Risk Register (ATAM Perspective)
+
+The following risks are drawn from Chapter 11 and supplemented with risks
+identified during this review.
+
+[cols="1,2,1,1,3", options="header"]
+|===
+|ID |Risk |Likelihood |Impact |ATAM Finding
+
+|R-1
+|Leptos API instability
+|Medium
+|High
+|Version pinning in `Cargo.lock` is the only mitigation.  If Leptos releases a
+breaking change, the UI layer must be refactored.  The domain and persistence
+layers are unaffected.  *Sensitivity point* for Simplicity.
+
+|R-2
+|WASM bundle too large for acceptable load time
+|Low
+|Medium
+|SSR mode renders HTML before hydration, making the page usable immediately.
+`wasm-opt` in the release profile reduces the bundle.  *Low residual risk.*
+
+|R-3
+|SQLite write contention
+|Low
+|Low
+|WAL mode must be enabled at startup (`PRAGMA journal_mode=WAL`).  For a
+single-user tool the risk is negligible even without WAL, but WAL is a
+one-line change with no downside.
+
+|R-4
+|SSRF via metadata fetch
+|Medium
+|Low
+|The server-side HTTP GET to user-supplied URLs must validate scheme (`http`/`https`)
+and confirm the resolved IP is not in a private range (RFC 1918, loopback).
+A 5-second timeout must be enforced.  *New condition* from this review.
+
+|R-5
+|API key in browser history
+|Medium
+|Medium
+|Accepted trade-off for a single-user tool on trusted devices.  The session
+cookie limits exposure to once per browser session.  *No change required.*
+
+|R-6
+|Data loss on `docker compose down -v`
+|Low
+|High
+|The README and deployment documentation **must** warn explicitly against using
+`-v` for normal shutdowns.  No application-level protection is possible.
+
+|R-7 (new)
+|FTS5 trigger missing or incorrect
+|Low
+|High
+|Identified during AP-3 analysis.  Silent stale search results are worse than
+an error.  Mandatory integration test covers this (see AP-3 conditions).
+
+|R-8 (new)
+|Session `HashMap` accessed without lock
+|Low
+|High
+|A data race on the session map causes non-deterministic panics.  Mandatory
+synchronisation condition (see AP-7 conditions).
+|===
+
+== Mandatory Implementation Conditions
+
+The following conditions **must** be satisfied before the relevant code is
+committed.  They are non-negotiable outcomes of this review.
+
+[cols="1,1,3", options="header"]
+|===
+|ID |Area |Condition
+
+|C-1
+|Auth middleware
+|Key comparison uses a constant-time equality function.
+Plain `==` on `String` is forbidden for API key validation.
+
+|C-2
+|Auth middleware
+|The auth middleware is registered at the outermost Axum router layer, before
+any route that reads or writes bookmark data.  The `/health` endpoint is
+explicitly excluded.
+
+|C-3
+|FTS5 schema
+|The three DML triggers (`bookmarks_ai`, `bookmarks_au`, `bookmarks_bd`) are
+created using `CREATE TRIGGER IF NOT EXISTS` in the schema initialisation SQL
+that runs unconditionally at every application startup.
+
+|C-4
+|FTS5 tests
+|At least one integration test verifies that after a bookmark insert, a content
+update, and a delete, the FTS5 index returns results consistent with the current
+state of the `bookmarks` table.
+
+|C-5
+|Session store
+|The in-memory session store is typed as `Arc<RwLock<HashMap<String, Session>>>`
+or equivalent.  No handler accesses the map without holding the appropriate lock.
+
+|C-6
+|SQLite startup
+|`PRAGMA journal_mode=WAL` is issued once at application startup, before any
+application query is executed.
+
+|C-7
+|Metadata fetch
+|The metadata fetcher validates that the URL scheme is `http` or `https`, resolves
+the host, and rejects any URL whose resolved IP falls within RFC 1918 ranges
+(10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) or loopback (127.0.0.0/8).
+The request timeout is set to 5 seconds.
+
+|C-8
+|Documentation
+|The deployment documentation explicitly warns that `docker compose down -v`
+destroys all bookmark data and must not be used for normal shutdowns.
+|===
+
+== Summary
+
+[cols="1,2,2", options="header"]
+|===
+|Quality Goal |Assessment |Key Finding
+
+|Simplicity (P1)
+|Well supported
+|Server functions eliminate the REST layer.  The three-layer decomposition
+(UI / server functions / domain) maps cleanly to the cognitive model.
+The reactive Leptos graph model is the main complexity cost; it is inherent to
+the framework choice and cannot be eliminated.
+
+|Retrievability (P2)
+|Well supported
+|FTS5 with trigger-maintained content table is architecturally sound for the
+target scale.  Trigger correctness is the primary risk; addressed by C-3 and C-4.
+
+|Deployability (P3)
+|Well supported
+|Single container + named volume satisfies all deployment scenarios.
+The absence of a migrations framework (TD-5) is a known post-MVP debt.
+
+|Rust Demonstrability (P4)
+|Satisfied by construction
+|Leptos + Axum + rusqlite covers every layer.  The < 50 line JS glue allowance
+is a reasonable concession to browser API constraints.
+|===
+
+The architecture is approved for implementation subject to the eight mandatory
+conditions in Section 4.  No architectural rework is required before coding begins.
