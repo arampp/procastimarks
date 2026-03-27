@@ -1,0 +1,428 @@
+= Procastimarks — Acceptance Criteria
+:revnumber: 0.1
+:revdate: 2026-03-26
+:toc:
+:toc-title: Table of Contents
+:numbered:
+
+Acceptance criteria are written in Gherkin (Given/When/Then) and grouped by
+functional requirement from the PRD.
+
+== FR-1 — Capture Bookmark
+
+=== AC-1.1 Bookmarklet opens the add form pre-filled with the current URL
+
+[source,gherkin]
+----
+Feature: Capture Bookmark via Bookmarklet
+
+  Background:
+    Given the Procastimarks application is running
+    And the Owner has installed the bookmarklet with a valid API key
+
+  Scenario: Bookmarklet opens add form pre-filled with current URL
+    Given the Owner is viewing "https://example.com/article"
+    When the Owner clicks the bookmarklet
+    Then a new browser tab opens
+    And the URL field of the add-bookmark form contains "https://example.com/article"
+----
+
+=== AC-1.2 Title and description are auto-fetched from the target page
+
+[source,gherkin]
+----
+  Scenario: Title and description are fetched automatically
+    Given the Owner is viewing "https://example.com/article"
+    And the page has the title "An Interesting Article"
+    And the page has a meta description "A summary of the article."
+    When the Owner clicks the bookmarklet and the add form loads
+    Then the title field contains "An Interesting Article"
+    And the description field contains "A summary of the article."
+----
+
+=== AC-1.3 Title falls back to URL when metadata fetch fails
+
+[source,gherkin]
+----
+  Scenario: Metadata fetch fails — title falls back to URL
+    Given the Owner is viewing "https://paywalled.example.com/article"
+    And the server-side fetch of that URL returns a non-200 status
+    When the Owner clicks the bookmarklet and the add form loads
+    Then the title field contains "https://paywalled.example.com/article"
+    And the description field is empty
+----
+
+=== AC-1.4 Saving a bookmark stores all fields and redirects to the list
+
+[source,gherkin]
+----
+  Scenario: Saving a new bookmark persists data and redirects
+    Given the add-bookmark form is open for "https://example.com/article"
+    And the title is "An Interesting Article"
+    And the description is "A summary."
+    When the Owner enters tags "rust, programming"
+    And the Owner enters comment "Check the section on async."
+    And the Owner submits the form
+    Then a bookmark is stored with:
+      | field       | value                            |
+      | url         | https://example.com/article      |
+      | title       | An Interesting Article           |
+      | description | A summary.                       |
+      | tags        | ["rust", "programming"]          |
+      | comment     | Check the section on async.      |
+    And the tags are stored in lowercase
+    And the Owner is redirected to the main list view
+    And the new bookmark appears at the top of the list
+----
+
+=== AC-1.5 Saving a bookmark without tags or comment is allowed
+
+[source,gherkin]
+----
+  Scenario: Tags and comment are optional
+    Given the add-bookmark form is open for "https://example.com/simple"
+    When the Owner submits the form without entering tags or a comment
+    Then a bookmark is stored with an empty tags list and an empty comment
+    And the Owner is redirected to the main list view
+----
+
+=== AC-1.6 Duplicate URL is rejected with an error message
+
+[source,gherkin]
+----
+  Scenario: Duplicate URL is rejected
+    Given a bookmark for "https://example.com/article" already exists
+    When the Owner opens the add form for "https://example.com/article"
+    And the Owner submits the form
+    Then no new bookmark is created
+    And the add-bookmark form is displayed again
+    And an error message "This URL is already saved." is visible
+----
+
+=== AC-1.7 Submitting with an invalid API key is rejected
+
+[source,gherkin]
+----
+  Scenario: Invalid API key is rejected
+    Given the bookmarklet contains an incorrect API key
+    When the Owner clicks the bookmarklet
+    Then the application returns HTTP 401
+    And an error page with the message "Unauthorised. Check your bookmarklet API key." is shown
+    And no add-bookmark form is rendered
+----
+
+== FR-2 — Main List View
+
+=== AC-2.1 Bookmarks are displayed in reverse-chronological order
+
+[source,gherkin]
+----
+Feature: Main Bookmark List
+
+  Background:
+    Given the Owner is authenticated
+    And the following bookmarks exist in order of creation:
+      | title   | created_at           |
+      | Oldest  | 2026-01-01T10:00:00Z |
+      | Middle  | 2026-02-01T10:00:00Z |
+      | Newest  | 2026-03-01T10:00:00Z |
+
+  Scenario: Bookmarks are listed newest first
+    When the Owner navigates to the main list view
+    Then the first bookmark displayed is "Newest"
+    And the last bookmark displayed is "Oldest"
+----
+
+=== AC-2.2 Each entry shows title, description excerpt, tags, and date
+
+[source,gherkin]
+----
+  Scenario: Bookmark entry displays required fields
+    When the Owner navigates to the main list view
+    Then each bookmark entry shows the title as a hyperlink to the original URL
+    And each bookmark entry shows the description excerpt
+    And each bookmark entry shows all tags
+    And each bookmark entry shows the creation date
+----
+
+=== AC-2.3 Empty state is shown when no bookmarks exist
+
+[source,gherkin]
+----
+  Scenario: Empty state when no bookmarks saved
+    Given no bookmarks exist in the database
+    When the Owner navigates to the main list view
+    Then the message "No bookmarks yet. Use the bookmarklet to save your first one." is displayed
+    And no bookmark entries are rendered
+----
+
+=== AC-2.4 Unauthenticated access to the list is rejected
+
+[source,gherkin]
+----
+  Scenario: Unauthenticated access is rejected
+    Given the Owner has no valid session cookie and no api_key parameter
+    When the Owner navigates to the main list view
+    Then the application returns HTTP 401
+    And an error page is displayed
+----
+
+== FR-3 — Search
+
+=== AC-3.1 Search filters the list as the user types
+
+[source,gherkin]
+----
+Feature: Search Bookmarks
+
+  Background:
+    Given the Owner is authenticated
+    And the following bookmarks exist:
+      | title                    | description             | tags           | comment           |
+      | Rust Async Programming   | Guide to async/await.   | rust, async    | Great intro.      |
+      | Python Data Science      | Pandas and NumPy guide. | python, data   |                   |
+      | Introduction to Docker   | Container basics.       | docker, devops | Read chapter 3.   |
+
+  Scenario: Typing a keyword filters the list
+    When the Owner types "rust" in the search box
+    Then only the bookmark "Rust Async Programming" is displayed
+    And the list updates without a full page reload
+----
+
+=== AC-3.2 Search matches across title, description, comment, and tags
+
+[source,gherkin]
+----
+  Scenario Outline: Search matches in any field
+    When the Owner types "<query>" in the search box
+    Then the bookmark "<expected_title>" is displayed
+
+    Examples:
+      | query    | expected_title         |
+      | async    | Rust Async Programming |
+      | Pandas   | Python Data Science    |
+      | chapter  | Introduction to Docker |
+      | devops   | Introduction to Docker |
+----
+
+=== AC-3.3 No results state is shown when search matches nothing
+
+[source,gherkin]
+----
+  Scenario: Search returns no results
+    When the Owner types "haskell" in the search box
+    Then no bookmark entries are displayed
+    And the message "No bookmarks match your search." is shown
+----
+
+=== AC-3.4 Clearing the search box restores the full list
+
+[source,gherkin]
+----
+  Scenario: Clearing the search box restores all bookmarks
+    Given the Owner has typed "rust" in the search box
+    And the list is filtered to one result
+    When the Owner clears the search box
+    Then all bookmarks are displayed in reverse-chronological order
+----
+
+=== AC-3.5 Search and tag filter are applied together
+
+[source,gherkin]
+----
+  Scenario: Search combined with tag filter narrows results
+    Given the Owner has selected the tag "rust"
+    When the Owner types "async" in the search box
+    Then only bookmarks that have the tag "rust" AND contain "async" are displayed
+----
+
+== FR-4 — Tag Autocomplete
+
+=== AC-4.1 Existing tags are suggested when typing a prefix
+
+[source,gherkin]
+----
+Feature: Tag Autocomplete
+
+  Background:
+    Given the Owner is authenticated
+    And the following tags exist: "rust", "ruby", "python", "programming"
+
+  Scenario: Prefix matches existing tags
+    Given the Owner is on the add-bookmark form
+    When the Owner types "ru" in the tag input
+    Then a dropdown appears containing "ruby" and "rust"
+    And "python" and "programming" are not in the dropdown
+----
+
+=== AC-4.2 Selecting a suggestion inserts the tag in lowercase
+
+[source,gherkin]
+----
+  Scenario: Selecting a suggestion inserts the lowercase tag
+    Given the Owner is on the add-bookmark form
+    And the dropdown shows "rust" as a suggestion
+    When the Owner selects "rust" from the dropdown
+    Then "rust" is added to the tag list
+    And the tag input field is cleared
+----
+
+=== AC-4.3 No dropdown is shown when no tags match the prefix
+
+[source,gherkin]
+----
+  Scenario: No autocomplete suggestions for unknown prefix
+    Given the Owner is on the add-bookmark form
+    When the Owner types "xyz" in the tag input
+    Then no autocomplete dropdown is shown
+----
+
+=== AC-4.4 Tags are stored in lowercase regardless of input casing
+
+[source,gherkin]
+----
+  Scenario: Tag casing is normalised on save
+    Given the Owner is on the add-bookmark form
+    When the Owner enters the tag "Rust"
+    And the Owner submits the form
+    Then the stored tag is "rust"
+----
+
+=== AC-4.5 Tags are stored with surrounding whitespace removed
+
+[source,gherkin]
+----
+  Scenario: Tag whitespace is trimmed on save
+    Given the Owner is on the add-bookmark form
+    When the Owner enters the tag "  rust  "
+    And the Owner submits the form
+    Then the stored tag is "rust"
+----
+
+== FR-5 — Delete Bookmark
+
+=== AC-5.1 Delete requires confirmation before removing the bookmark
+
+[source,gherkin]
+----
+Feature: Delete Bookmark
+
+  Background:
+    Given the Owner is authenticated
+    And a bookmark titled "An Interesting Article" exists
+
+  Scenario: Delete action shows a confirmation prompt
+    When the Owner clicks the delete action on "An Interesting Article"
+    Then a confirmation prompt is displayed with the message
+      "Delete this bookmark? This cannot be undone."
+    And the bookmark is not yet deleted
+----
+
+=== AC-5.2 Confirming deletion removes the bookmark from the list
+
+[source,gherkin]
+----
+  Scenario: Confirming deletion removes the bookmark
+    Given the confirmation prompt is visible for "An Interesting Article"
+    When the Owner confirms the deletion
+    Then the bookmark "An Interesting Article" is no longer in the database
+    And "An Interesting Article" does not appear in the list
+----
+
+=== AC-5.3 Cancelling deletion leaves the bookmark unchanged
+
+[source,gherkin]
+----
+  Scenario: Cancelling leaves the bookmark intact
+    Given the confirmation prompt is visible for "An Interesting Article"
+    When the Owner cancels the deletion
+    Then the bookmark "An Interesting Article" still exists in the database
+    And "An Interesting Article" is still visible in the list
+----
+
+=== AC-5.4 Deleting an already-deleted bookmark is handled gracefully
+
+[source,gherkin]
+----
+  Scenario: Idempotent delete — bookmark already removed
+    Given "An Interesting Article" has already been deleted by another means
+    When the Owner confirms the deletion in a stale tab
+    Then no error is shown
+    And the entry is removed from the list
+----
+
+== FR-6 — Authentication
+
+=== AC-6.1 Valid API key grants access and sets a session cookie
+
+[source,gherkin]
+----
+Feature: Authentication
+
+  Background:
+    Given the application is configured with API_KEY "secret-key-123"
+
+  Scenario: Valid API key grants access
+    When the Owner navigates to "/?api_key=secret-key-123"
+    Then the application returns HTTP 200
+    And a session cookie is set in the browser
+----
+
+=== AC-6.2 Session cookie allows access without repeating the API key
+
+[source,gherkin]
+----
+  Scenario: Session cookie allows subsequent access
+    Given the Owner has a valid session cookie set
+    When the Owner navigates to "/" without an api_key parameter
+    Then the application returns HTTP 200
+    And the bookmark list is displayed
+----
+
+=== AC-6.3 Missing credentials are rejected
+
+[source,gherkin]
+----
+  Scenario: No API key and no session cookie is rejected
+    Given the Owner has no session cookie
+    When the Owner navigates to "/" without an api_key parameter
+    Then the application returns HTTP 401
+    And an error page is displayed
+    And no bookmark data is exposed
+----
+
+=== AC-6.4 Incorrect API key is rejected
+
+[source,gherkin]
+----
+  Scenario: Wrong API key is rejected
+    When the Owner navigates to "/?api_key=wrong-key"
+    Then the application returns HTTP 401
+    And an error page is displayed
+----
+
+=== AC-6.5 Health check endpoint is publicly accessible
+
+[source,gherkin]
+----
+  Scenario: Health check requires no authentication
+    When any client sends GET /health without credentials
+    Then the application returns HTTP 200
+    And the response body is {"status":"ok"}
+----
+
+=== AC-6.6 All protected routes require valid authentication
+
+[source,gherkin]
+----
+  Scenario Outline: Protected routes reject unauthenticated requests
+    Given the Owner has no session cookie and provides no api_key
+    When the Owner sends a request to "<path>"
+    Then the application returns HTTP 401
+
+    Examples:
+      | path             |
+      | /                |
+      | /add             |
+      | /bookmarks/1     |
+----
