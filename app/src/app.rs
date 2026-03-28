@@ -8,6 +8,8 @@ use leptos_router::{
     path,
 };
 
+use crate::components::AddBookmarkPage;
+
 /// Root component — sets up routing and metadata context.
 #[component]
 pub fn App() -> impl IntoView {
@@ -18,6 +20,7 @@ pub fn App() -> impl IntoView {
         <Router>
             <Routes fallback=|| view! { <p>"Page not found."</p> }>
                 <Route path=path!("/") view=HomePage/>
+                <Route path=path!("/add") view=AddBookmarkPage/>
             </Routes>
         </Router>
     }

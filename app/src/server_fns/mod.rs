@@ -16,7 +16,11 @@
 /// * AC-1.5: tags and comment may be empty.
 /// * AC-1.6: duplicate URL returns `SaveBookmarkError::DuplicateUrl`.
 ///
-/// # US-8 (#14) — Tag Autocomplete (server-side half)
+/// # US-8 (#14) — Add-bookmark form server-side helpers
+///
+/// `fetch_metadata` satisfies:
+/// * AC-1.2: title and description fetched from target URL.
+/// * AC-1.3: on fetch failure title = URL, description = empty.
 ///
 /// `fetch_tags` satisfies:
 /// * AC-4.1: prefix query returns matching tags in alphabetical order.
@@ -91,3 +95,19 @@ pub async fn fetch_tags(prefix: String) -> Result<Vec<String>, ServerFnError> {
     repo.fetch_tags(&prefix)
         .map_err(|e| ServerFnError::<server_fn::error::NoCustomError>::ServerError(e.to_string()))
 }
+
+/// Fetch the `<title>` and `<meta name="description">` from a remote URL.
+///
+/// On any error (network, non-200, timeout, private IP) returns a `Metadata`
+/// where `title` is the raw URL and `description` is empty (AC-1.3).
+///
+/// This is a thin server-side wrapper around `MetadataFetcher::fetch`.
+#[server(FetchMetadata, "/api")]
+pub async fn fetch_metadata(url: String) -> Result<(String, String), ServerFnError> {
+    use crate::metadata::MetadataFetcher;
+
+    let fetcher = MetadataFetcher::new();
+    let m = fetcher.fetch(&url).await;
+    Ok((m.title, m.description))
+}
+
