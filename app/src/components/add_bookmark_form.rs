@@ -172,9 +172,9 @@ pub fn AddBookmarkForm(
             let description_w = description;
             async move {
                 match fetch_metadata(u).await {
-                    Ok((t, d)) => {
-                        title_w.set(t);
-                        description_w.set(d);
+                    Ok(m) => {
+                        title_w.set(m.title);
+                        description_w.set(m.description);
                     }
                     Err(_) => {
                         // AC-1.3: title stays as the raw URL; description stays empty.

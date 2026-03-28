@@ -96,13 +96,15 @@ Query construction::
 Autocomplete::
 Tag autocomplete queries the `bookmarks` table directly using SQLite's built-in
 `json_each` table-valued function to explode the JSON tag array into individual
-rows, then filters by prefix and deduplicates:
+rows, then filters by prefix and deduplicates.  The prefix is bound as `?1` and
+`%` appended in SQL; `%`, `_`, and `\` in the prefix are escaped so they are
+treated as literals rather than wildcards (`ESCAPE '\'`):
 +
 [source,sql]
 ----
 SELECT DISTINCT value
 FROM bookmarks, json_each(bookmarks.tags)
-WHERE value LIKE ?1
+WHERE value LIKE (?1 || '%') ESCAPE '\'
 ORDER BY value
 ----
 +

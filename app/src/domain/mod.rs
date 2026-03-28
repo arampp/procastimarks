@@ -5,6 +5,22 @@
 /// function signatures (serialised over the wire).
 use serde::{Deserialize, Serialize};
 
+// ── Metadata ──────────────────────────────────────────────────────────────────
+
+/// Title and description extracted from a web page, or a safe fallback.
+///
+/// Returned by the `fetch_metadata` server function and by `MetadataFetcher`.
+/// Lives in the domain module so it is compiled for both server and WASM
+/// targets (Leptos server function stubs on WASM need the type for
+/// deserialization).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Metadata {
+    /// Page title (`<title>` text), or the raw URL on any failure.
+    pub title: String,
+    /// Meta description, or empty string on any failure.
+    pub description: String,
+}
+
 // ── Bookmark entity ───────────────────────────────────────────────────────────
 
 /// The central domain entity — a saved web page.

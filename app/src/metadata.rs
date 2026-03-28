@@ -27,14 +27,9 @@ use tracing::warn;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
-/// Title and description extracted from a web page, or a safe fallback.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Metadata {
-    /// Page title (`<title>` text), or the raw URL on any failure.
-    pub title: String,
-    /// Meta description, or empty string on any failure.
-    pub description: String,
-}
+/// Re-export so callers can use `crate::metadata::Metadata` without knowing
+/// the domain module.
+pub use crate::domain::Metadata;
 
 /// Fetches metadata from a remote URL, enforcing C-7 SSRF mitigations.
 pub struct MetadataFetcher {
@@ -43,12 +38,15 @@ pub struct MetadataFetcher {
 
 impl MetadataFetcher {
     /// Construct a fetcher with a 5-second timeout (C-7).
-    pub fn new() -> Self {
+    ///
+    /// Returns `Err` if the underlying TLS backend fails to initialise rather
+    /// than panicking.
+    pub fn new() -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
-            .expect("Failed to build reqwest client");
-        Self { client }
+            .map_err(|e| anyhow::anyhow!("Failed to build reqwest client: {e}"))?;
+        Ok(Self { client })
     }
 
     /// Construct a fetcher with a custom `reqwest::Client`.
@@ -95,7 +93,7 @@ impl MetadataFetcher {
 
         let port = parsed.port_or_known_default().unwrap_or(80);
 
-        match resolve_and_check_private(&host, port) {
+        match resolve_and_check_private(&host, port).await {
             Ok(false) => { /* public IP — proceed */ }
             Ok(true) => {
                 warn!(url, host, "MetadataFetcher: rejected private/loopback IP (C-7)");
@@ -153,37 +151,71 @@ impl MetadataFetcher {
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
-/// Resolve `host` to an IP address and check whether it is private or loopback.
+/// Resolve `host` to IP addresses and check whether *any* is private or
+/// loopback.
+///
+/// Resolves all addresses returned by the OS resolver so that a multi-A-record
+/// host cannot bypass the guard by returning a mix of public and private IPs.
+///
+/// DNS resolution is run via `tokio::task::spawn_blocking` to avoid blocking
+/// the async runtime's worker threads.
 ///
 /// Returns:
-/// * `Ok(false)` — the IP is public; the request may proceed.
-/// * `Ok(true)`  — the IP is private or loopback; reject the request.
-/// * `Err(_)`    — resolution failed; treat as rejection (fail-closed).
-fn resolve_and_check_private(host: &str, port: u16) -> Result<bool, ()> {
+/// * `Ok(false)` — all resolved IPs are public; the request may proceed.
+/// * `Ok(true)`  — at least one IP is private or loopback; reject the request.
+/// * `Err(_)`    — resolution failed or returned no addresses; treat as
+///                 rejection (fail-closed).
+async fn resolve_and_check_private(host: &str, port: u16) -> Result<bool, ()> {
     // If the host is already a numeric IP, parse it directly without a DNS
     // lookup.
     if let Ok(ip) = host.parse::<IpAddr>() {
         return Ok(is_private_or_loopback(ip));
     }
 
-    // Otherwise, resolve via the OS resolver.
+    // Otherwise, resolve via the OS resolver on a blocking thread so we don't
+    // stall the Tokio worker pool during DNS I/O.
     let addr_str = format!("{host}:{port}");
-    let mut addrs = addr_str.to_socket_addrs().map_err(|_| ())?;
+    let addrs = tokio::task::spawn_blocking(move || {
+        addr_str.to_socket_addrs().map(|iter| iter.collect::<Vec<_>>())
+    })
+    .await
+    .map_err(|_| ())?   // join error
+    .map_err(|_| ())?;  // IO error
 
-    // Check the first resolved address.  Fail-closed if the iterator is empty.
-    let socket_addr = addrs.next().ok_or(())?;
-    Ok(is_private_or_loopback(socket_addr.ip()))
+    if addrs.is_empty() {
+        return Err(());
+    }
+
+    // Reject if *any* resolved address is private or loopback (TOCTOU
+    // mitigation: we check all records, not just the first).
+    let any_private = addrs.iter().any(|sa| is_private_or_loopback(sa.ip()));
+    Ok(any_private)
 }
 
-/// Return `true` if `ip` is an RFC-1918, loopback, or link-local address.
+/// Return `true` if `ip` is an RFC-1918, loopback, link-local, or ULA address.
 pub(crate) fn is_private_or_loopback(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_private_v4(v4),
-        IpAddr::V6(v6) => v6.is_loopback(),
+        IpAddr::V6(v6) => {
+            // ::1 loopback
+            if v6.is_loopback() {
+                return true;
+            }
+            let segments = v6.segments();
+            // fe80::/10 link-local unicast
+            if (segments[0] & 0xffc0) == 0xfe80 {
+                return true;
+            }
+            // fc00::/7 unique local (ULA)
+            if (segments[0] & 0xfe00) == 0xfc00 {
+                return true;
+            }
+            false
+        }
     }
 }
 
-/// RFC-1918 private ranges + loopback for IPv4.
+/// RFC-1918 private ranges + loopback + link-local for IPv4.
 pub(crate) fn is_private_v4(ip: Ipv4Addr) -> bool {
     let octets = ip.octets();
     // 10.0.0.0/8
@@ -200,6 +232,10 @@ pub(crate) fn is_private_v4(ip: Ipv4Addr) -> bool {
     }
     // 127.0.0.0/8 loopback
     if octets[0] == 127 {
+        return true;
+    }
+    // 169.254.0.0/16 link-local
+    if octets[0] == 169 && octets[1] == 254 {
         return true;
     }
     false
@@ -354,12 +390,37 @@ mod tests {
         assert!(is_private_or_loopback(loopback));
     }
 
+    /// IPv6 link-local fe80::/10 must be rejected.
+    #[test]
+    fn rejects_ipv6_link_local() {
+        use std::net::Ipv6Addr;
+        // fe80::1 is the canonical link-local address.
+        let link_local: Ipv6Addr = "fe80::1".parse().unwrap();
+        assert!(is_private_or_loopback(IpAddr::V6(link_local)));
+    }
+
+    /// IPv6 ULA fc00::/7 must be rejected.
+    #[test]
+    fn rejects_ipv6_ula() {
+        use std::net::Ipv6Addr;
+        // fd00::1 is inside the ULA fc00::/7 range.
+        let ula: Ipv6Addr = "fd00::1".parse().unwrap();
+        assert!(is_private_or_loopback(IpAddr::V6(ula)));
+    }
+
+    /// IPv4 link-local 169.254.0.0/16 must be rejected.
+    #[test]
+    fn rejects_ipv4_link_local() {
+        assert!(is_private_v4(Ipv4Addr::new(169, 254, 0, 1)));
+        assert!(is_private_v4(Ipv4Addr::new(169, 254, 255, 254)));
+    }
+
     // ── MetadataFetcher::fetch — SSRF guard (no network) ─────────────────────
 
     /// C-7: non-http(s) scheme → fallback, no network request.
     #[tokio::test]
     async fn rejects_non_http_scheme() {
-        let fetcher = MetadataFetcher::new();
+        let fetcher = MetadataFetcher::new().unwrap();
         let meta = fetcher.fetch("ftp://example.com/file").await;
         assert_eq!(meta.title, "ftp://example.com/file");
         assert_eq!(meta.description, "");
@@ -368,7 +429,7 @@ mod tests {
     /// C-7: 192.168.x.x IP literal → fallback, no network request.
     #[tokio::test]
     async fn rejects_private_ip_192_168_in_url() {
-        let fetcher = MetadataFetcher::new();
+        let fetcher = MetadataFetcher::new().unwrap();
         let meta = fetcher.fetch("http://192.168.1.1/page").await;
         assert_eq!(meta.title, "http://192.168.1.1/page");
         assert_eq!(meta.description, "");
@@ -377,7 +438,7 @@ mod tests {
     /// C-7: 10.x.x.x IP literal → fallback, no network request.
     #[tokio::test]
     async fn rejects_10_block_ip_literal_in_url() {
-        let fetcher = MetadataFetcher::new();
+        let fetcher = MetadataFetcher::new().unwrap();
         let meta = fetcher.fetch("http://10.0.0.1/page").await;
         assert_eq!(meta.title, "http://10.0.0.1/page");
         assert_eq!(meta.description, "");
@@ -386,7 +447,7 @@ mod tests {
     /// C-7: 127.0.0.1 loopback literal → fallback, no network request.
     #[tokio::test]
     async fn rejects_loopback_ip_literal_in_url() {
-        let fetcher = MetadataFetcher::new();
+        let fetcher = MetadataFetcher::new().unwrap();
         let meta = fetcher.fetch("http://127.0.0.1/page").await;
         assert_eq!(meta.title, "http://127.0.0.1/page");
         assert_eq!(meta.description, "");

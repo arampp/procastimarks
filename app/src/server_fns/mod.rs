@@ -32,8 +32,9 @@ use crate::domain::SaveBookmarkError;
 /// Persist a new bookmark.
 ///
 /// `tags_csv` is a comma-separated list of raw tags typed by the user.
-/// Splitting, trimming, lowercasing, and deduplication are performed inside
-/// `BookmarkRepository::insert`.
+/// This function splits the CSV string and trims each tag before passing
+/// the slice to `BookmarkRepository::insert`, which performs lowercasing
+/// and deduplication.
 ///
 /// The caller (form component) is responsible for redirecting the user after
 /// a successful save.
@@ -60,21 +61,30 @@ pub async fn save_bookmark(
     })?;
 
     // Split the CSV tag string into individual raw tags.
-    let raw_tags: Vec<&str> = tags_csv
+    let raw_tags: Vec<String> = tags_csv
         .split(',')
-        .map(|t| t.trim())
+        .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty())
         .collect();
 
-    match repo.insert(&url, &title, &description, &raw_tags, &comment) {
-        Ok(InsertResult::Inserted(_)) => Ok(()),
-        Ok(InsertResult::DuplicateUrl) => {
-            Err(ServerFnError::WrappedServerError(SaveBookmarkError::DuplicateUrl))
+    // `BookmarkRepository::insert` acquires a `std::sync::Mutex`, which
+    // blocks.  Run it on a dedicated blocking thread so we don't stall the
+    // Tokio worker pool under concurrent requests.
+    tokio::task::spawn_blocking(move || {
+        match repo.insert(&url, &title, &description, &raw_tags, &comment) {
+            Ok(InsertResult::Inserted(_)) => Ok(()),
+            Ok(InsertResult::DuplicateUrl) => {
+                Err(ServerFnError::WrappedServerError(SaveBookmarkError::DuplicateUrl))
+            }
+            Err(e) => Err(ServerFnError::WrappedServerError(
+                SaveBookmarkError::Internal(e.to_string()),
+            )),
         }
-        Err(e) => Err(ServerFnError::WrappedServerError(
-            SaveBookmarkError::Internal(e.to_string()),
-        )),
-    }
+    })
+    .await
+    .map_err(|e| {
+        ServerFnError::WrappedServerError(SaveBookmarkError::Internal(e.to_string()))
+    })?
 }
 
 /// Return all stored tags whose value starts with `prefix`, sorted
@@ -92,8 +102,13 @@ pub async fn fetch_tags(prefix: String) -> Result<Vec<String>, ServerFnError> {
         )
     })?;
 
-    repo.fetch_tags(&prefix)
-        .map_err(|e| ServerFnError::<server_fn::error::NoCustomError>::ServerError(e.to_string()))
+    // `fetch_tags` acquires a `std::sync::Mutex`; run on a blocking thread.
+    tokio::task::spawn_blocking(move || {
+        repo.fetch_tags(&prefix)
+            .map_err(|e| ServerFnError::<server_fn::error::NoCustomError>::ServerError(e.to_string()))
+    })
+    .await
+    .map_err(|e| ServerFnError::<server_fn::error::NoCustomError>::ServerError(e.to_string()))?
 }
 
 /// Return the configured `API_KEY` to authenticated clients.
@@ -104,25 +119,35 @@ pub async fn fetch_tags(prefix: String) -> Result<Vec<String>, ServerFnError> {
 ///
 /// The endpoint is protected by the auth middleware — an unauthenticated
 /// client cannot retrieve the key by calling this function.
+///
+/// The key is sourced from the Leptos request context, where it is injected
+/// at router construction time alongside the `BookmarkRepository`.  This
+/// ensures tests that use `create_router_with_state` with an explicit
+/// `AppState` get the same key the middleware uses, without any env reads.
 #[server(GetApiKey, "/api")]
 pub async fn get_api_key() -> Result<String, ServerFnError> {
-    std::env::var("API_KEY").map_err(|_| {
+    use std::sync::Arc;
+
+    let api_key = use_context::<Arc<str>>().ok_or_else(|| {
         ServerFnError::<server_fn::error::NoCustomError>::ServerError(
-            "API_KEY is not set".to_string(),
+            "API_KEY not found in context".to_string(),
         )
-    })
+    })?;
+    Ok(api_key.to_string())
 }
+/// Fetch the `<title>` and meta description from a remote URL.
 ///
 /// On any error (network, non-200, timeout, private IP) returns a `Metadata`
 /// where `title` is the raw URL and `description` is empty (AC-1.3).
 ///
 /// This is a thin server-side wrapper around `MetadataFetcher::fetch`.
 #[server(FetchMetadata, "/api")]
-pub async fn fetch_metadata(url: String) -> Result<(String, String), ServerFnError> {
+pub async fn fetch_metadata(url: String) -> Result<crate::domain::Metadata, ServerFnError> {
     use crate::metadata::MetadataFetcher;
 
-    let fetcher = MetadataFetcher::new();
-    let m = fetcher.fetch(&url).await;
-    Ok((m.title, m.description))
+    let fetcher = MetadataFetcher::new().map_err(|e| {
+        ServerFnError::<server_fn::error::NoCustomError>::ServerError(e.to_string())
+    })?;
+    Ok(fetcher.fetch(&url).await)
 }
 
