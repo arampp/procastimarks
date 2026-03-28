@@ -133,25 +133,26 @@ fn attach_session_cookie(response: &mut Response, token: &str) {
 
 /// Constant-time equality check for API key strings (C-1).
 ///
-/// Compares over `max(a.len(), b.len())` bytes — missing bytes are treated as
-/// 0 — and separately asserts equal lengths.  This ensures both the content
-/// and the length comparison run in constant time regardless of candidate input,
-/// preventing length-based timing oracles.
+/// Rejects mismatched lengths in O(1) — this does not leak the expected key's
+/// content, only that the lengths differ, which is already observable to an
+/// attacker who controls the candidate.  When lengths match, `subtle::ct_eq`
+/// compares every byte in constant time, preventing content-based oracles.
+///
+/// This avoids the timing leak present in the previous `max(len)` loop
+/// implementation, where a short candidate caused the loop to run for
+/// `expected.len()` iterations, making runtime proportional to the secret
+/// key's length.
 fn constant_time_eq(candidate: &str, expected: &str) -> bool {
     let a = candidate.as_bytes();
     let b = expected.as_bytes();
-    let max_len = a.len().max(b.len());
 
-    // Pad both slices to max_len with zeroes for the comparison.
-    let mut result = subtle::Choice::from(1u8); // start: equal
-    for i in 0..max_len {
-        let byte_a = a.get(i).copied().unwrap_or(0);
-        let byte_b = b.get(i).copied().unwrap_or(0);
-        result &= byte_a.ct_eq(&byte_b);
+    // Different lengths → always false, no content comparison needed.
+    if a.len() != b.len() {
+        return false;
     }
-    // Also require equal lengths (prevents zero-length key matching anything).
-    let same_len = subtle::Choice::from((a.len() == b.len()) as u8);
-    (result & same_len).into()
+
+    // Same length → constant-time byte comparison over the full slice.
+    a.ct_eq(b).into()
 }
 
 /// Build the HTTP 401 Unauthorized response.
