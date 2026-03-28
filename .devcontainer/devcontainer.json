@@ -19,6 +19,16 @@
 			"installDirectlyFromGitHubRelease": true,
 			"version": "latest"
 		}
+	},
+
+	// Forward the host SSH agent (Bitwarden) into the container so SSH keys are available,
+	// and mount ~/.ssh so hostname aliases in ~/.ssh/config resolve correctly.
+	"mounts": [
+		"source=${localEnv:SSH_AUTH_SOCK},target=/tmp/ssh-agent.sock,type=bind",
+		"source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind"
+	],
+	"remoteEnv": {
+		"SSH_AUTH_SOCK": "/tmp/ssh-agent.sock"
 	}
 
 	// Use 'mounts' to make the cargo cache persistent in a Docker Volume.
