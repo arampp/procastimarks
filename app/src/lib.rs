@@ -81,20 +81,22 @@ fn build_router(state: middleware::auth::AppState) -> axum::Router {
 
     let routes = generate_route_list(app::App);
 
-    // Clone the repo so the closure can capture it by value.
+    // Clone the repo and api_key so the closure can capture them by value.
     let repo = state.repo.clone();
+    let api_key = state.api_key.clone();
 
     axum::Router::new()
         // Public health check — no authentication required (C-2).
         .route("/health", get(routes::health::handler))
         // Leptos server functions are mounted automatically at /api/;
-        // `leptos_routes_with_context` injects the BookmarkRepository into
-        // every server function's Leptos context.
+        // `leptos_routes_with_context` injects the BookmarkRepository and the
+        // API key into every server function's Leptos context.
         .leptos_routes_with_context(
             &leptos_options,
             routes,
             move || {
                 leptos::context::provide_context(repo.clone());
+                leptos::context::provide_context(api_key.clone());
             },
             {
                 let leptos_options = leptos_options.clone();

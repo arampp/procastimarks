@@ -20,16 +20,22 @@ use crate::server_fns::get_api_key;
 /// bookmarklet works regardless of which hostname the instance is accessed
 /// from.
 ///
+/// The API key is percent-encoded for the query parameter so that any
+/// reserved characters (`&`, `=`, `+`, etc.) are transmitted correctly.
+///
 /// # Panics
 ///
 /// Never — the returned string is always a valid attribute value.
 pub fn bookmarklet_uri(api_key: &str) -> String {
+    // Percent-encode the API key for safe embedding in a query string.
+    let encoded_key: String = form_urlencoded::byte_serialize(api_key.as_bytes()).collect();
+
     // One-liner: safe for use in an `href` attribute.
     // window.open returns a Window handle; the trailing void(0) makes the
     // bookmarklet URI return undefined, preventing the browser from
     // navigating the current tab.
     format!(
-        "javascript:(function(){{window.open(window.location.origin+'/add?url='+encodeURIComponent(location.href)+'&api_key={api_key}','_blank');}})();void(0);"
+        "javascript:(function(){{window.open(window.location.origin+'/add?url='+encodeURIComponent(location.href)+'&api_key={encoded_key}','_blank');}})();void(0);"
     )
 }
 
@@ -89,6 +95,21 @@ pub fn BookmarkletInstall() -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// API key with reserved characters is percent-encoded in the URI.
+    #[test]
+    fn bookmarklet_uri_percent_encodes_api_key() {
+        // A key with '&' and '=' would break the query string if not encoded.
+        let uri = bookmarklet_uri("key&foo=bar");
+        assert!(
+            uri.contains("key%26foo%3Dbar"),
+            "reserved chars in API key must be percent-encoded; got: {uri}"
+        );
+        assert!(
+            !uri.contains("key&foo"),
+            "raw '&' must not appear in the encoded key"
+        );
+    }
 
     /// The bookmarklet URI must contain the API key verbatim.
     #[test]

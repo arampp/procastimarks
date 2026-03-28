@@ -105,15 +105,20 @@ impl BookmarkRepository {
     ///
     /// Uses SQLite's `json_each` to explode the JSON tag array into individual
     /// rows, then filters by prefix and deduplicates across all bookmarks.
+    ///
+    /// The prefix is escaped before embedding in the `LIKE` pattern so that
+    /// literal `%` and `_` characters in a tag prefix are treated as literals,
+    /// not SQL wildcards.  The `ESCAPE '\'` clause tells SQLite to honour
+    /// the backslash escape.
     pub fn fetch_tags(&self, prefix: &str) -> anyhow::Result<Vec<String>> {
         let conn = self.conn.lock().expect("DB mutex poisoned");
-        let like_pattern = format!("{prefix}%");
+        let like_pattern = format!("{}%", escape_like(prefix));
 
         let mut stmt = conn
             .prepare(
                 "SELECT DISTINCT value
                  FROM bookmarks, json_each(bookmarks.tags)
-                 WHERE value LIKE ?1
+                 WHERE value LIKE ?1 ESCAPE '\\'
                  ORDER BY value",
             )
             .context("Failed to prepare fetch_tags statement")?;
@@ -128,11 +133,31 @@ impl BookmarkRepository {
     }
 }
 
+// ── Private helpers ───────────────────────────────────────────────────────────
+
+/// Escape a raw prefix string for safe use in a SQLite `LIKE` pattern with
+/// `ESCAPE '\'`.
+///
+/// The characters `%`, `_`, and `\` are SQLite `LIKE` metacharacters; this
+/// function prepends a `\` before each so they are treated as literals.
+fn escape_like(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if matches!(ch, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 // ── Row mapper ────────────────────────────────────────────────────────────────
 
 fn row_to_bookmark(row: &rusqlite::Row<'_>) -> rusqlite::Result<Bookmark> {
     let tags_json: String = row.get(4)?;
-    let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+    let tags: Vec<String> = serde_json::from_str(&tags_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e))
+    })?;
     Ok(Bookmark {
         id: row.get(0)?,
         url: row.get(1)?,
