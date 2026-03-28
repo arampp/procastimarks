@@ -24,7 +24,7 @@ const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60); // 24 hours
 /// Metadata stored for each active session.
 #[derive(Debug, Clone)]
 pub struct Session {
-    /// Wall-clock time the session was created (used for TTL-based expiry).
+    /// Monotonic time when the session was created (used for TTL-based expiry).
     pub created_at: Instant,
 }
 
