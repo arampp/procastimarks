@@ -7,6 +7,7 @@
 /// Code under `#[cfg(not(target_arch = "wasm32"))]` is server-only.
 
 pub mod app;
+pub mod components;
 pub mod domain;
 
 #[cfg(not(target_arch = "wasm32"))]
