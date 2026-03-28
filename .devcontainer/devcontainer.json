@@ -3,7 +3,9 @@
 {
 	"name": "Rust",
 	// Build from the local Dockerfile so we can bake in shell-history setup.
-	"build": { "dockerfile": "Dockerfile" },
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
 	"features": {
 		"ghcr.io/devcontainers-extra/features/neovim-apt-get:1": {},
 		"ghcr.io/devcontainer-community/devcontainer-features/delta:1": {
@@ -20,7 +22,6 @@
 			"version": "latest"
 		}
 	},
-
 	// Forward the host SSH agent (Bitwarden) into the container so SSH keys are available,
 	// and mount ~/.ssh so hostname aliases in ~/.ssh/config resolve correctly.
 	"mounts": [
@@ -33,23 +34,34 @@
 	"remoteEnv": {
 		"SSH_AUTH_SOCK": "/tmp/ssh-agent.sock"
 	},
-
 	// Fix volume ownership on Linux hosts where the host UID/GID may differ
 	// from the container user (as recommended by the VS Code docs).
-	"postCreateCommand": "sudo chown -R $(whoami) /commandhistory"
-
+	// Also sync jj user identity from git config (VS Code syncs ~/.gitconfig from host on create).
+	"postCreateCommand": "sudo chown -R $(whoami) /commandhistory && jj config set --user user.name \"$(git config user.name)\" && jj config set --user user.email \"$(git config user.email)\"",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"asciidoctor.asciidoctor-vscode",
+				"streetsidesoftware.code-spell-checker",
+				"fill-labs.dependi",
+				"yzhang.markdown-all-in-one",
+				"shd101wyy.markdown-preview-enhanced",
+				"DavidAnson.vscode-markdownlint",
+				"jebbs.plantuml",
+				"rust-lang.rust-analyzer",
+				"tamasfe.even-better-toml",
+				"vadimcn.vscode-lldb"
+			]
+		}
+	}
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	// "features": {},
-
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
-
 	// Use 'postCreateCommand' to run commands after the container is created.
 	// "postCreateCommand": "rustc --version",
-
 	// Configure tool-specific properties.
 	// "customizations": {},
-
 	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
 	// "remoteUser": "root"
 }
