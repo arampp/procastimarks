@@ -22,20 +22,25 @@ pub mod session;
 
 /// Construct the Axum [`axum::Router`] for the application.
 ///
-/// Reads `API_KEY` from the environment at construction time.  Tests inject
-/// the key via `std::env::set_var` before calling this function.
+/// Reads `API_KEY` from the environment at construction time.  Panics if the
+/// variable is absent or empty — there is no safe default; a missing key would
+/// allow any `?api_key=` value to authenticate.
 ///
 /// This function is the single composition root for the HTTP layer.
-/// Tests drive it directly via [`tower::ServiceExt::oneshot`] without
-/// spawning a process.
+/// Tests should use [`create_router_with_state`] directly with an explicit
+/// [`middleware::auth::AppState`] to avoid mutating process-wide environment
+/// variables.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn create_router() -> axum::Router {
     use middleware::auth::AppState;
     use std::sync::Arc;
 
-    let api_key: Arc<str> = std::env::var("API_KEY")
-        .unwrap_or_default()
-        .into();
+    let api_key_str = std::env::var("API_KEY")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| panic!("API_KEY environment variable must be set and non-empty"));
+
+    let api_key: Arc<str> = api_key_str.into();
 
     let state = AppState {
         api_key,

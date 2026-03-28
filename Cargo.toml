@@ -46,6 +46,9 @@ tower-http = { version = "0.5", features = ["fs"] }
 # Constant-time comparison (ATAM C-1: prevents timing attacks on API key)
 subtle = { version = "2" }
 
+# Percent-decoding for query parameters (used by auth middleware)
+form_urlencoded = { version = "1" }
+
 # Cryptographically random session token generation (US-5)
 uuid = { version = "1", features = ["v4"] }
 

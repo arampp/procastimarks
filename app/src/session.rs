@@ -11,15 +11,28 @@
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
+
+/// How long a session remains valid after creation.
+///
+/// Sessions older than this are considered expired and will be cleaned up on
+/// the next write (lazy eviction).
+const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60); // 24 hours
 
 /// Metadata stored for each active session.
 #[derive(Debug, Clone)]
 pub struct Session {
-    /// Wall-clock time the session was created (for future expiry support).
+    /// Wall-clock time the session was created (used for TTL-based expiry).
     pub created_at: Instant,
+}
+
+impl Session {
+    /// Returns `true` if this session has not yet exceeded `SESSION_TTL`.
+    fn is_live(&self) -> bool {
+        self.created_at.elapsed() < SESSION_TTL
+    }
 }
 
 /// The session store type required by ATAM C-5.
@@ -38,26 +51,40 @@ pub fn new_store() -> SessionStore {
 ///
 /// The token is a UUID v4 string: cryptographically random, URL-safe, and
 /// distinct from the API key (satisfies AC-6.1).
+///
+/// Expired sessions are lazily evicted on each call so the map does not grow
+/// without bound.
+///
+/// If the `RwLock` is poisoned (a previous writer panicked while holding it),
+/// the lock is recovered rather than propagating a panic — the middleware will
+/// continue to function.
 pub fn create_session(store: &SessionStore) -> String {
     let token = Uuid::new_v4().to_string();
-    store
-        .write()
-        .expect("session store RwLock poisoned")
-        .insert(
-            token.clone(),
-            Session {
-                created_at: Instant::now(),
-            },
-        );
+    let mut map = store.write().unwrap_or_else(|e| e.into_inner());
+
+    // Lazy TTL eviction: remove all expired sessions before inserting the new one.
+    map.retain(|_, session| session.is_live());
+
+    map.insert(
+        token.clone(),
+        Session {
+            created_at: Instant::now(),
+        },
+    );
     token
 }
 
-/// Return `true` if `token` refers to a live session in `store`.
+/// Return `true` if `token` refers to a live, non-expired session in `store`.
+///
+/// If the `RwLock` is poisoned the lock is recovered; a poisoned store is
+/// treated as having no valid sessions (fail closed → 401, not crash).
 pub fn is_valid_session(store: &SessionStore, token: &str) -> bool {
     store
         .read()
-        .expect("session store RwLock poisoned")
-        .contains_key(token)
+        .unwrap_or_else(|e| e.into_inner())
+        .get(token)
+        .map(|s| s.is_live())
+        .unwrap_or(false)
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
@@ -106,5 +133,74 @@ mod tests {
         let store = new_store();
         let token = create_session(&store);
         assert_ne!(token, "test-api-key");
+    }
+
+    #[test]
+    fn expired_session_is_evicted_on_next_create() {
+        let store = new_store();
+        // Manually insert an already-expired session.
+        {
+            let mut map = store.write().unwrap();
+            map.insert(
+                "old-token".to_string(),
+                Session {
+                    created_at: Instant::now() - SESSION_TTL - Duration::from_secs(1),
+                },
+            );
+        }
+        assert_eq!(store.read().unwrap().len(), 1);
+
+        // Creating a new session triggers eviction.
+        create_session(&store);
+
+        let map = store.read().unwrap();
+        assert!(
+            !map.contains_key("old-token"),
+            "expired session must be evicted"
+        );
+        assert_eq!(map.len(), 1, "only the new session should remain");
+    }
+
+    #[test]
+    fn expired_session_token_is_not_valid() {
+        let store = new_store();
+        {
+            let mut map = store.write().unwrap();
+            map.insert(
+                "expired-token".to_string(),
+                Session {
+                    created_at: Instant::now() - SESSION_TTL - Duration::from_secs(1),
+                },
+            );
+        }
+        assert!(!is_valid_session(&store, "expired-token"));
+    }
+
+    #[test]
+    fn poisoned_lock_does_not_panic_on_read() {
+        let store = new_store();
+        // Poison the lock by panicking inside a write guard.
+        let store_clone = Arc::clone(&store);
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = store_clone.write().unwrap();
+            panic!("intentional poison");
+        });
+        assert!(store.is_poisoned());
+        // is_valid_session must recover — must not panic.
+        assert!(!is_valid_session(&store, "any-token"));
+    }
+
+    #[test]
+    fn poisoned_lock_does_not_panic_on_write() {
+        let store = new_store();
+        let store_clone = Arc::clone(&store);
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = store_clone.write().unwrap();
+            panic!("intentional poison");
+        });
+        assert!(store.is_poisoned());
+        // create_session must recover — must not panic.
+        let token = create_session(&store);
+        assert!(!token.is_empty());
     }
 }
