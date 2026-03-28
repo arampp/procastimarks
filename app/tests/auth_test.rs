@@ -5,13 +5,13 @@
 //! C-1, C-2, and C-5.
 //!
 //! Chicago-school style: the real Axum router is exercised via
-//! `tower::ServiceExt::oneshot`.  The router is constructed with a known
-//! test API key injected through the `API_KEY` environment variable so that
-//! tests are self-contained and do not rely on a `.env` file.
+//! `tower::ServiceExt::oneshot`.  All routers are built from an explicit
+//! `AppState` (using `create_router_with_state`) so tests never mutate the
+//! process-wide `API_KEY` environment variable and can safely run in parallel.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use procastimarks::{create_router, create_router_with_state};
+use procastimarks::create_router_with_state;
 use procastimarks::middleware::auth::AppState;
 use procastimarks::session;
 use std::sync::Arc;
@@ -19,21 +19,21 @@ use tower::ServiceExt;
 
 const TEST_API_KEY: &str = "test-secret-key-for-auth-tests";
 
-fn router() -> axum::Router {
-    std::env::set_var("API_KEY", TEST_API_KEY);
-    create_router()
-}
-
-/// Build a router from an explicit `AppState` (for two-request session tests).
-fn router_with(state: AppState) -> axum::Router {
-    create_router_with_state(state)
-}
-
 fn test_state() -> AppState {
     AppState {
         api_key: Arc::from(TEST_API_KEY),
         sessions: session::new_store(),
     }
+}
+
+/// Build a router from a fresh `AppState` with the test API key.
+fn router() -> axum::Router {
+    create_router_with_state(test_state())
+}
+
+/// Build a router from an explicit `AppState` (for two-request session tests).
+fn router_with(state: AppState) -> axum::Router {
+    create_router_with_state(state)
 }
 
 // ── AC-6.3 / AC-6.6: no credentials → 401 ────────────────────────────────────
@@ -117,6 +117,27 @@ async fn health_is_public_even_after_auth_middleware() {
     );
 }
 
+// ── C-2: /health sub-paths are NOT public ────────────────────────────────────
+
+/// Routes starting with `/health` but not exactly `/health` must still require
+/// auth, guarding against accidental public exposure of future admin endpoints.
+#[tokio::test]
+async fn health_sub_path_requires_auth() {
+    let app = router();
+    let request = Request::builder()
+        .uri("/healthz")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "/healthz must not be public — only exact /health is exempted"
+    );
+}
+
 // ── Timing-attack mitigation (C-1) ───────────────────────────────────────────
 
 /// A key of different length from the correct key must still return 401
@@ -141,7 +162,8 @@ async fn wrong_key_different_length_returns_401() {
 // ── AC-6.1: valid api_key → Set-Cookie response header ───────────────────────
 
 /// When the correct api_key is presented the response must include a
-/// `Set-Cookie` header whose value starts with `session=` (AC-6.1).
+/// `Set-Cookie` header whose value starts with `session=` and includes the
+/// `HttpOnly`, `Secure`, and `SameSite=Strict` attributes (AC-6.1).
 #[tokio::test]
 async fn correct_api_key_sets_session_cookie() {
     let app = router();
@@ -167,6 +189,10 @@ async fn correct_api_key_sets_session_cookie() {
     assert!(
         cookie_str.contains("HttpOnly"),
         "session cookie must be HttpOnly"
+    );
+    assert!(
+        cookie_str.contains("Secure"),
+        "session cookie must have the Secure attribute"
     );
     assert!(
         cookie_str.contains("SameSite=Strict"),

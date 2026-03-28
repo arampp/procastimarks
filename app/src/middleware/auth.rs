@@ -3,12 +3,13 @@
 /// This module implements EPIC-2 (Authentication) across two user stories:
 ///
 /// **US-4 (#10)** — API-key middleware:
-/// - C-1: constant-time comparison via `subtle::ConstantTimeEq`
-/// - C-2: outermost Axum layer; `/health` and `/pkg/*` exempted
+/// - C-1: constant-time comparison via `subtle::ConstantTimeEq`; compares over
+///   `max(a.len(), b.len())` bytes so key length is not leaked by timing.
+/// - C-2: outermost Axum layer; `/health` (exact) and `/pkg/*` exempted
 ///
 /// **US-5 (#11)** — Session cookie:
 /// - C-5: session store typed `Arc<RwLock<HashMap<String, Session>>>`
-/// - AC-6.1: valid `api_key` → `Set-Cookie: session=<token>; HttpOnly; SameSite=Strict`
+/// - AC-6.1: valid `api_key` → `Set-Cookie: session=<token>; HttpOnly; Secure; SameSite=Strict`
 /// - AC-6.2: valid session cookie accepted without `api_key` param
 use std::sync::Arc;
 
@@ -35,14 +36,17 @@ pub struct AppState {
     pub sessions: SessionStore,
 }
 
-/// Paths that are accessible without any credentials (C-2).
+/// Routes that are accessible without any credentials (C-2).
 ///
-/// The check is a prefix match so `/health` covers the exact path and
-/// `/pkg/` covers all static WASM / JS assets served by Leptos.
-const PUBLIC_PREFIXES: &[&str] = &["/health", "/pkg/"];
+/// `/health` is an **exact** match so future routes like `/healthz` or
+/// `/health/admin` are not inadvertently made public.
+/// `/pkg/` uses a prefix match to cover all static WASM / JS assets.
+fn is_public(path: &str) -> bool {
+    path == "/health" || path.starts_with("/pkg/")
+}
 
 /// Cookie name used for the session token.
-const SESSION_COOKIE_NAME: &str = "session";
+pub const SESSION_COOKIE_NAME: &str = "session";
 
 /// Axum `from_fn_with_state` middleware handler.
 ///
@@ -59,13 +63,13 @@ pub async fn require_auth(
     let path = request.uri().path();
 
     // C-2: Exempt public routes.
-    if PUBLIC_PREFIXES.iter().any(|prefix| path.starts_with(prefix)) {
+    if is_public(path) {
         return next.run(request).await;
     }
 
     // Check session cookie (AC-6.2).
     if let Some(token) = extract_session_cookie(&request) {
-        if session::is_valid_session(&state.sessions, token) {
+        if session::is_valid_session(&state.sessions, &token) {
             return next.run(request).await;
         }
     }
@@ -73,7 +77,7 @@ pub async fn require_auth(
     // Check `api_key` query parameter (C-1, AC-6.1).
     if let Some(query) = request.uri().query() {
         if let Some(candidate) = extract_api_key_param(query) {
-            if constant_time_eq(candidate, &state.api_key) {
+            if constant_time_eq(&candidate, &state.api_key) {
                 // Create a new session and set the cookie on the response.
                 let token = session::create_session(&state.sessions);
                 let mut response = next.run(request).await;
@@ -89,35 +93,38 @@ pub async fn require_auth(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Extract the value of the `api_key` query parameter from a raw query string.
-fn extract_api_key_param(query: &str) -> Option<&str> {
-    for pair in query.split('&') {
-        if let Some(value) = pair.strip_prefix("api_key=") {
-            return Some(value);
-        }
-    }
-    None
+/// Extract the value of the `api_key` query parameter from a raw query string,
+/// percent-decoding it so that API keys containing reserved characters work
+/// reliably.
+fn extract_api_key_param(query: &str) -> Option<String> {
+    form_urlencoded::parse(query.as_bytes())
+        .find(|(key, _)| key == "api_key")
+        .map(|(_, value)| value.into_owned())
 }
 
 /// Extract the session token from the `Cookie` request header, if present.
 ///
-/// Returns the token value (the part after `session=`) or `None`.
-fn extract_session_cookie(request: &Request<Body>) -> Option<&str> {
+/// Uses `SESSION_COOKIE_NAME` so the cookie name is defined in a single place.
+fn extract_session_cookie(request: &Request<Body>) -> Option<String> {
     let cookie_header = request.headers().get(header::COOKIE)?.to_str().ok()?;
+    let prefix = format!("{}=", SESSION_COOKIE_NAME);
     for part in cookie_header.split(';') {
         let part = part.trim();
-        if let Some(value) = part.strip_prefix("session=") {
-            return Some(value);
+        if let Some(value) = part.strip_prefix(prefix.as_str()) {
+            return Some(value.to_owned());
         }
     }
     None
 }
 
-/// Append `Set-Cookie: session=<token>; Path=/; HttpOnly; SameSite=Strict`
+/// Append `Set-Cookie: session=<token>; Path=/; HttpOnly; Secure; SameSite=Strict`
 /// to `response`.
+///
+/// `Secure` is included so browsers only transmit the session token over HTTPS,
+/// preventing token leakage over plaintext connections.
 fn attach_session_cookie(response: &mut Response, token: &str) {
     let cookie = format!(
-        "{SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict"
+        "{SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; Secure; SameSite=Strict"
     );
     if let Ok(value) = axum::http::HeaderValue::from_str(&cookie) {
         response.headers_mut().insert(header::SET_COOKIE, value);
@@ -126,15 +133,25 @@ fn attach_session_cookie(response: &mut Response, token: &str) {
 
 /// Constant-time equality check for API key strings (C-1).
 ///
-/// Uses `subtle::ConstantTimeEq` with length-difference folded in to prevent
-/// length-based timing leaks.
+/// Compares over `max(a.len(), b.len())` bytes — missing bytes are treated as
+/// 0 — and separately asserts equal lengths.  This ensures both the content
+/// and the length comparison run in constant time regardless of candidate input,
+/// preventing length-based timing oracles.
 fn constant_time_eq(candidate: &str, expected: &str) -> bool {
     let a = candidate.as_bytes();
     let b = expected.as_bytes();
-    let len = a.len().min(b.len());
-    let prefix_eq = a[..len].ct_eq(&b[..len]);
+    let max_len = a.len().max(b.len());
+
+    // Pad both slices to max_len with zeroes for the comparison.
+    let mut result = subtle::Choice::from(1u8); // start: equal
+    for i in 0..max_len {
+        let byte_a = a.get(i).copied().unwrap_or(0);
+        let byte_b = b.get(i).copied().unwrap_or(0);
+        result &= byte_a.ct_eq(&byte_b);
+    }
+    // Also require equal lengths (prevents zero-length key matching anything).
     let same_len = subtle::Choice::from((a.len() == b.len()) as u8);
-    (prefix_eq & same_len).into()
+    (result & same_len).into()
 }
 
 /// Build the HTTP 401 Unauthorized response.
@@ -162,13 +179,39 @@ fn unauthorized_response() -> Response {
 mod tests {
     use super::*;
 
+    // ── is_public ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn health_exact_is_public() {
+        assert!(is_public("/health"));
+    }
+
+    #[test]
+    fn health_sub_path_is_not_public() {
+        assert!(!is_public("/healthz"));
+        assert!(!is_public("/health/admin"));
+        assert!(!is_public("/health/"));
+    }
+
+    #[test]
+    fn pkg_prefix_is_public() {
+        assert!(is_public("/pkg/app.wasm"));
+        assert!(is_public("/pkg/"));
+    }
+
+    #[test]
+    fn root_is_not_public() {
+        assert!(!is_public("/"));
+        assert!(!is_public("/bookmarks"));
+    }
+
     // ── extract_api_key_param ─────────────────────────────────────────────────
 
     #[test]
     fn extracts_api_key_when_present() {
         assert_eq!(
             extract_api_key_param("api_key=my-secret"),
-            Some("my-secret")
+            Some("my-secret".to_owned())
         );
     }
 
@@ -176,7 +219,7 @@ mod tests {
     fn extracts_api_key_from_multiple_params() {
         assert_eq!(
             extract_api_key_param("foo=bar&api_key=my-secret&baz=qux"),
-            Some("my-secret")
+            Some("my-secret".to_owned())
         );
     }
 
@@ -190,6 +233,24 @@ mod tests {
         assert_eq!(extract_api_key_param(""), None);
     }
 
+    #[test]
+    fn percent_decodes_api_key_value() {
+        // A key containing '+' encoded as '%2B' must decode correctly.
+        assert_eq!(
+            extract_api_key_param("api_key=my%2Bsecret"),
+            Some("my+secret".to_owned())
+        );
+    }
+
+    #[test]
+    fn plus_in_query_decoded_as_space() {
+        // RFC 1866 / application/x-www-form-urlencoded: '+' means space.
+        assert_eq!(
+            extract_api_key_param("api_key=hello+world"),
+            Some("hello world".to_owned())
+        );
+    }
+
     // ── extract_session_cookie ────────────────────────────────────────────────
 
     #[test]
@@ -199,7 +260,7 @@ mod tests {
             .header(header::COOKIE, "session=abc123")
             .body(Body::empty())
             .unwrap();
-        assert_eq!(extract_session_cookie(&req), Some("abc123"));
+        assert_eq!(extract_session_cookie(&req), Some("abc123".to_owned()));
     }
 
     #[test]
@@ -209,7 +270,7 @@ mod tests {
             .header(header::COOKIE, "foo=bar; session=tok; baz=qux")
             .body(Body::empty())
             .unwrap();
-        assert_eq!(extract_session_cookie(&req), Some("tok"));
+        assert_eq!(extract_session_cookie(&req), Some("tok".to_owned()));
     }
 
     #[test]
