@@ -52,8 +52,10 @@ pub fn new_store() -> SessionStore {
 /// The token is a UUID v4 string: cryptographically random, URL-safe, and
 /// distinct from the API key (satisfies AC-6.1).
 ///
-/// Expired sessions are lazily evicted on each call so the map does not grow
-/// without bound.
+/// Expired sessions are lazily evicted on each call so stale entries do not
+/// accumulate indefinitely.  The map can still hold up to one entry per live
+/// session created within `SESSION_TTL`; callers that need a hard cap on
+/// concurrent sessions should add an explicit limit before inserting.
 ///
 /// If the `RwLock` is poisoned (a previous writer panicked while holding it),
 /// the lock is recovered rather than propagating a panic — the middleware will
