@@ -9,6 +9,9 @@
 pub mod app;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod metadata;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod middleware;
 
 #[cfg(not(target_arch = "wasm32"))]
