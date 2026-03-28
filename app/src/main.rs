@@ -38,8 +38,14 @@ async fn main() -> anyhow::Result<()> {
     procastimarks::persistence::init_db(&database_url)
         .context("Failed to initialise the SQLite database")?;
 
+    let conn = rusqlite::Connection::open(&database_url)
+        .with_context(|| format!("Failed to open SQLite connection at {database_url}"))?;
+    let repo = procastimarks::persistence::BookmarkRepository::new(
+        std::sync::Arc::new(std::sync::Mutex::new(conn)),
+    );
+
     // ── HTTP server ──────────────────────────────────────────────────────────
-    let router = procastimarks::create_router();
+    let router = procastimarks::create_router(repo);
     let listener = tokio::net::TcpListener::bind(&bind_address)
         .await
         .with_context(|| format!("Failed to bind to {bind_address}"))?;
