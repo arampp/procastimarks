@@ -94,10 +94,20 @@ Query construction::
 * An empty search query falls back to `SELECT * FROM bookmarks ORDER BY created_at DESC`.
 
 Autocomplete::
-Tag autocomplete queries the `bookmarks` table directly
-(`SELECT DISTINCT tag FROM bookmark_tags WHERE tag LIKE ?% ORDER BY tag`)
-rather than the FTS index, because prefix matching is more natural via `LIKE`
-for this use case.
+Tag autocomplete queries the `bookmarks` table directly using SQLite's built-in
+`json_each` table-valued function to explode the JSON tag array into individual
+rows, then filters by prefix and deduplicates:
++
+[source,sql]
+----
+SELECT DISTINCT value
+FROM bookmarks, json_each(bookmarks.tags)
+WHERE value LIKE ?1
+ORDER BY value
+----
++
+This avoids the need for a separate join table; the JSON array stored in
+`bookmarks.tags` is the single source of truth for tag data.
 
 === Reactive UI State
 
