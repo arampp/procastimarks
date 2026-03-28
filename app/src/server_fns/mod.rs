@@ -96,7 +96,22 @@ pub async fn fetch_tags(prefix: String) -> Result<Vec<String>, ServerFnError> {
         .map_err(|e| ServerFnError::<server_fn::error::NoCustomError>::ServerError(e.to_string()))
 }
 
-/// Fetch the `<title>` and `<meta name="description">` from a remote URL.
+/// Return the configured `API_KEY` to authenticated clients.
+///
+/// This is used by the [`BookmarkletInstall`] component to pre-fill the
+/// bookmarklet URL with the correct API key, so the owner can install it
+/// from the home page without having to look up the key separately.
+///
+/// The endpoint is protected by the auth middleware — an unauthenticated
+/// client cannot retrieve the key by calling this function.
+#[server(GetApiKey, "/api")]
+pub async fn get_api_key() -> Result<String, ServerFnError> {
+    std::env::var("API_KEY").map_err(|_| {
+        ServerFnError::<server_fn::error::NoCustomError>::ServerError(
+            "API_KEY is not set".to_string(),
+        )
+    })
+}
 ///
 /// On any error (network, non-200, timeout, private IP) returns a `Metadata`
 /// where `title` is the raw URL and `description` is empty (AC-1.3).

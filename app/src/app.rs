@@ -8,7 +8,7 @@ use leptos_router::{
     path,
 };
 
-use crate::components::AddBookmarkPage;
+use crate::components::{AddBookmarkPage, BookmarkletInstall};
 
 /// Root component — sets up routing and metadata context.
 #[component]
@@ -33,6 +33,7 @@ fn HomePage() -> impl IntoView {
         <main>
             <h1>"Procastimarks"</h1>
             <p>"No bookmarks yet. Use the bookmarklet to save your first one."</p>
+            <BookmarkletInstall/>
         </main>
     }
 }
