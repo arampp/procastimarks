@@ -25,20 +25,12 @@
 	// and mount ~/.ssh so hostname aliases in ~/.ssh/config resolve correctly.
 	"mounts": [
 		"source=${localEnv:SSH_AUTH_SOCK},target=/tmp/ssh-agent.sock,type=bind",
-		"source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind"
+		"source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind",
+		"source=devcontainer-cargo-cache-${devcontainerId},target=/usr/local/cargo,type=volume"
 	],
 	"remoteEnv": {
 		"SSH_AUTH_SOCK": "/tmp/ssh-agent.sock"
 	}
-
-	// Use 'mounts' to make the cargo cache persistent in a Docker Volume.
-	// "mounts": [
-	// 	{
-	// 		"source": "devcontainer-cargo-cache-${devcontainerId}",
-	// 		"target": "/usr/local/cargo",
-	// 		"type": "volume"
-	// 	}
-	// ]
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	// "features": {},
