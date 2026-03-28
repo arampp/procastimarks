@@ -247,5 +247,32 @@ Issues a server-side HTTP GET to the target URL using `reqwest`.
 Parses the response HTML with the `scraper` crate.
 Extracts the first `<title>` element and the content of
 `<meta name="description">`.
-Returns a `(title, description)` tuple; on any error, returns
-`(url.to_string(), String::new())`.
+Returns a `Metadata { title, description }` value; on any error, returns
+a fallback where `title` is the raw URL and `description` is empty.
+
+SSRF Mitigations (ATAM C-7 — all three are mandatory)::
+. *Scheme validation* — Only `http` and `https` schemes are accepted.
+  Any other scheme (e.g., `ftp://`, `file://`) causes an immediate fallback
+  without issuing a network request.
+. *Private-IP rejection* — The hostname is resolved to an IP address before
+  the request is sent.  IP addresses in RFC-1918 ranges
+  (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) and loopback ranges
+  (`127.0.0.0/8`, `::1`) are rejected.  Resolution failure is treated as
+  rejection (fail-closed).
+. *Timeout* — The `reqwest::Client` is built with a 5-second total request
+  timeout.  Any request that exceeds this limit is cancelled and the fallback
+  is returned.
+
+Public API::
++
+[source,rust]
+----
+pub struct Metadata { pub title: String, pub description: String }
+
+pub struct MetadataFetcher { /* reqwest::Client with 5 s timeout */ }
+
+impl MetadataFetcher {
+    pub fn new() -> Self;
+    pub async fn fetch(&self, url: &str) -> Metadata;
+}
+----
