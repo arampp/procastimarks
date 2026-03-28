@@ -127,7 +127,7 @@ fn attach_session_cookie(response: &mut Response, token: &str) {
         "{SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; Secure; SameSite=Strict"
     );
     if let Ok(value) = axum::http::HeaderValue::from_str(&cookie) {
-        response.headers_mut().insert(header::SET_COOKIE, value);
+        response.headers_mut().append(header::SET_COOKIE, value);
     }
 }
 
