@@ -32,7 +32,9 @@
 		"source=devcontainer-shell-history-${devcontainerId},target=/commandhistory,type=volume"
 	],
 	"remoteEnv": {
-		"SSH_AUTH_SOCK": "/tmp/ssh-agent.sock"
+		"SSH_AUTH_SOCK": "/tmp/ssh-agent.sock",
+		"EDITOR": "nvim",
+		"VISUAL": "nvim"
 	},
 	// Fix volume ownership on Linux hosts where the host UID/GID may differ
 	// from the container user (as recommended by the VS Code docs).
