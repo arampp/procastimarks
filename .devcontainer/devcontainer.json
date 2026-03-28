@@ -38,10 +38,14 @@
 	},
 	// Fix volume ownership on Linux hosts where the host UID/GID may differ
 	// from the container user (as recommended by the VS Code docs).
-	// Also sync jj user identity from git config (VS Code syncs ~/.gitconfig from host on create).
-	"postCreateCommand": "sudo chown -R $(whoami) /commandhistory && jj config set --user user.name \"$(git config user.name)\" && jj config set --user user.email \"$(git config user.email)\"",
+	// Also sync jj user identity from git config (VS Code syncs ~/.gitconfig from host on create),
+	// and set zsh as the default login shell.
+	"postCreateCommand": "sudo chown -R $(whoami) /commandhistory && sudo chsh -s $(which zsh) $(whoami) && jj config set --user user.name \"$(git config user.name)\" && jj config set --user user.email \"$(git config user.email)\"",
 	"customizations": {
 		"vscode": {
+			"settings": {
+				"terminal.integrated.defaultProfile.linux": "zsh"
+			},
 			"extensions": [
 				"asciidoctor.asciidoctor-vscode",
 				"streetsidesoftware.code-spell-checker",
