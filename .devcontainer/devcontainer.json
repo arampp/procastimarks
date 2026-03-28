@@ -22,8 +22,8 @@
 	// Forward the host SSH agent (Bitwarden) into the container so SSH keys are available,
 	// and mount ~/.ssh so hostname aliases in ~/.ssh/config resolve correctly.
 	"mounts": [
-		"source=${localEnv:SSH_AUTH_SOCK},target=/tmp/ssh-agent.sock,type=bind",
-		"source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind",
+		"source=${localEnv:SSH_AUTH_SOCK},target=/tmp/ssh-agent.sock,type=bind,readonly",
+		"source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,readonly",
 		"source=devcontainer-cargo-cache-${devcontainerId},target=/usr/local/cargo,type=volume",
 		// Persist shell history across container rebuilds.
 		"source=devcontainer-shell-history-${devcontainerId},target=/commandhistory,type=volume"
