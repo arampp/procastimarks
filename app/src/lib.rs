@@ -7,6 +7,7 @@
 /// Code under `#[cfg(not(target_arch = "wasm32"))]` is server-only.
 
 pub mod app;
+pub mod domain;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod metadata;
@@ -19,6 +20,9 @@ pub mod persistence;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod routes;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod server_fns;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod session;
@@ -34,7 +38,7 @@ pub mod session;
 /// [`middleware::auth::AppState`] to avoid mutating process-wide environment
 /// variables.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn create_router() -> axum::Router {
+pub fn create_router(repo: persistence::BookmarkRepository) -> axum::Router {
     use middleware::auth::AppState;
     use std::sync::Arc;
 
@@ -48,6 +52,7 @@ pub fn create_router() -> axum::Router {
     let state = AppState {
         api_key,
         sessions: session::new_store(),
+        repo,
     };
 
     build_router(state)
@@ -75,14 +80,26 @@ fn build_router(state: middleware::auth::AppState) -> axum::Router {
 
     let routes = generate_route_list(app::App);
 
+    // Clone the repo so the closure can capture it by value.
+    let repo = state.repo.clone();
+
     axum::Router::new()
         // Public health check — no authentication required (C-2).
         .route("/health", get(routes::health::handler))
-        // Leptos server functions are mounted automatically at /api/
-        .leptos_routes(&leptos_options, routes, {
-            let leptos_options = leptos_options.clone();
-            move || shell(leptos_options.clone())
-        })
+        // Leptos server functions are mounted automatically at /api/;
+        // `leptos_routes_with_context` injects the BookmarkRepository into
+        // every server function's Leptos context.
+        .leptos_routes_with_context(
+            &leptos_options,
+            routes,
+            move || {
+                leptos::context::provide_context(repo.clone());
+            },
+            {
+                let leptos_options = leptos_options.clone();
+                move || shell(leptos_options.clone())
+            },
+        )
         .fallback(leptos_axum::file_and_error_handler(shell))
         // Authentication middleware — outermost layer, wraps every route (C-2).
         .layer(axum_middleware::from_fn_with_state(

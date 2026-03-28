@@ -13,16 +13,29 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use procastimarks::create_router_with_state;
 use procastimarks::middleware::auth::AppState;
+use procastimarks::persistence::{BookmarkRepository};
 use procastimarks::session;
-use std::sync::Arc;
+use rusqlite::Connection;
+use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 const TEST_API_KEY: &str = "test-secret-key-for-auth-tests";
+
+/// Build an in-memory `BookmarkRepository` for tests.
+///
+/// The schema is applied so all tables exist, but the database starts empty.
+fn test_repo() -> BookmarkRepository {
+    let conn = Connection::open_in_memory().expect("in-memory DB must open");
+    procastimarks::persistence::schema::run_schema(&conn)
+        .expect("schema init must succeed");
+    BookmarkRepository::new(Arc::new(Mutex::new(conn)))
+}
 
 fn test_state() -> AppState {
     AppState {
         api_key: Arc::from(TEST_API_KEY),
         sessions: session::new_store(),
+        repo: test_repo(),
     }
 }
 

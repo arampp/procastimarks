@@ -23,18 +23,21 @@ use axum::{
 };
 use subtle::ConstantTimeEq;
 
+use crate::persistence::BookmarkRepository;
 use crate::session::{self, SessionStore};
 
 /// Shared application state threaded through the auth middleware.
 ///
 /// Bundled into a single struct because Axum supports only one typed state
-/// per router.  Both fields are cheaply cloneable (`Arc` / `Arc<str>`).
+/// per router.  All fields are cheaply cloneable (`Arc` wrappers).
 #[derive(Clone)]
 pub struct AppState {
     /// Expected API key (from `API_KEY` env var), stored as `Arc<str>`.
     pub api_key: Arc<str>,
     /// In-memory session store (C-5).
     pub sessions: SessionStore,
+    /// Bookmark repository — shared database connection.
+    pub repo: BookmarkRepository,
 }
 
 /// Routes that are accessible without any credentials (C-2).
