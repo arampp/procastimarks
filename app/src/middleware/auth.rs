@@ -3,8 +3,9 @@
 /// This module implements EPIC-2 (Authentication) across two user stories:
 ///
 /// **US-4 (#10)** — API-key middleware:
-/// - C-1: constant-time comparison via `subtle::ConstantTimeEq`; compares over
-///   `max(a.len(), b.len())` bytes so key length is not leaked by timing.
+/// - C-1: constant-time comparison via `subtle::ConstantTimeEq`; length
+///   mismatches are rejected up front in O(1), and equal-length keys are
+///   compared in constant time.
 /// - C-2: outermost Axum layer; `/health` (exact) and `/pkg/*` exempted
 ///
 /// **US-5 (#11)** — Session cookie:
