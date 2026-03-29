@@ -59,7 +59,7 @@ impl BookmarkRepository {
     /// * `Ok(InsertResult::Inserted(bookmark))` — the row was created.
     /// * `Ok(InsertResult::DuplicateUrl)` — a bookmark with that URL already
     ///   exists; nothing was written.
-    /// * `Err(_)` — an unexpected I/O or constraint error.
+    /// * `Err(_)` — an unexpected I/O, constraint, or mutex-poison error.
     pub fn insert(
         &self,
         url: &str,
@@ -71,7 +71,10 @@ impl BookmarkRepository {
         let tags = normalise_tags(raw_tags);
         let tags_json = serde_json::to_string(&tags).context("Failed to serialise tags to JSON")?;
 
-        let conn = self.conn.lock().expect("DB mutex poisoned");
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("DB mutex poisoned"))?;
 
         let rows = conn
             .execute(
@@ -111,7 +114,10 @@ impl BookmarkRepository {
     /// not SQL wildcards.  The `ESCAPE '\'` clause tells SQLite to honour
     /// the backslash escape.
     pub fn fetch_tags(&self, prefix: &str) -> anyhow::Result<Vec<String>> {
-        let conn = self.conn.lock().expect("DB mutex poisoned");
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("DB mutex poisoned"))?;
         let like_pattern = format!("{}%", escape_like(prefix));
 
         let mut stmt = conn

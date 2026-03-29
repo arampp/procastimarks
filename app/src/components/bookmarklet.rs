@@ -60,11 +60,17 @@ pub fn BookmarkletInstall() -> impl IntoView {
                 {move || {
                     match api_key_res.get() {
                         None => view! { <p>"Loading…"</p> }.into_any(),
-                        Some(Err(_)) => view! {
-                            <p class="error-message">
-                                "Could not load bookmarklet. Check that API_KEY is set."
-                            </p>
-                        }.into_any(),
+                        Some(Err(err)) => {
+                            // Log details server-side; show a generic message
+                            // so users aren't pointed at a specific (possibly
+                            // wrong) remediation.
+                            leptos::logging::error!("Failed to load API key for bookmarklet: {err}");
+                            view! {
+                                <p class="error-message">
+                                    "Could not load bookmarklet. Please try again later."
+                                </p>
+                            }.into_any()
+                        },
                         Some(Ok(key)) => {
                             let href = bookmarklet_uri(&key);
                             view! {

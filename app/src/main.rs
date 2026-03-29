@@ -45,7 +45,8 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // ── HTTP server ──────────────────────────────────────────────────────────
-    let router = procastimarks::create_router(repo);
+    let router = procastimarks::create_router(repo)
+        .context("Failed to build Axum router")?;
     let listener = tokio::net::TcpListener::bind(&bind_address)
         .await
         .with_context(|| format!("Failed to bind to {bind_address}"))?;

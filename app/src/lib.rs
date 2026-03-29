@@ -29,28 +29,30 @@ pub mod session;
 
 /// Construct the Axum [`axum::Router`] for the application.
 ///
-/// Reads `API_KEY` from the environment at construction time.  Panics if the
-/// variable is absent or empty — there is no safe default; a missing key would
-/// allow any `?api_key=` value to authenticate.
+/// Reads `API_KEY` from the environment at construction time.  Returns `Err`
+/// if the variable is absent or empty — there is no safe default; a missing
+/// key would allow any `?api_key=` value to authenticate.
+///
+/// Returns `Err` if the `MetadataFetcher` TLS backend fails to initialise.
 ///
 /// This function is the single composition root for the HTTP layer.
 /// Tests should use [`create_router_with_state`] directly with an explicit
 /// [`middleware::auth::AppState`] to avoid mutating process-wide environment
 /// variables.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn create_router(repo: persistence::BookmarkRepository) -> axum::Router {
+pub fn create_router(repo: persistence::BookmarkRepository) -> anyhow::Result<axum::Router> {
     use middleware::auth::AppState;
     use std::sync::Arc;
 
     let api_key_str = std::env::var("API_KEY")
         .ok()
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| panic!("API_KEY environment variable must be set and non-empty"));
+        .ok_or_else(|| anyhow::anyhow!("API_KEY environment variable must be set and non-empty"))?;
 
     let api_key: Arc<str> = api_key_str.into();
 
     let metadata_fetcher = metadata::MetadataFetcher::new()
-        .unwrap_or_else(|e| panic!("Failed to build MetadataFetcher: {e}"));
+        .map_err(|e| anyhow::anyhow!("Failed to build MetadataFetcher: {e}"))?;
 
     let state = AppState {
         api_key,
@@ -59,7 +61,7 @@ pub fn create_router(repo: persistence::BookmarkRepository) -> axum::Router {
         metadata_fetcher,
     };
 
-    build_router(state)
+    Ok(build_router(state))
 }
 
 /// Construct the router with an explicit [`middleware::auth::AppState`].
