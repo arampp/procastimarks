@@ -341,7 +341,7 @@ pub fn AddBookmarkPage() -> impl IntoView {
         if u.is_empty() {
             view! {
                 <main>
-                    <p class="error-message">"No URL provided. Use the bookmarklet to open this page."</p>
+                    <p class="error-message" role="alert" aria-live="assertive">"No URL provided. Use the bookmarklet to open this page."</p>
                 </main>
             }.into_any()
         } else {

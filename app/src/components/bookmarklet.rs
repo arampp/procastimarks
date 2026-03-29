@@ -66,7 +66,7 @@ pub fn BookmarkletInstall() -> impl IntoView {
                             // wrong) remediation.
                             leptos::logging::error!("Failed to load API key for bookmarklet: {err}");
                             view! {
-                                <p class="error-message">
+                                <p class="error-message" role="alert">
                                     "Could not load bookmarklet. Please try again later."
                                 </p>
                             }.into_any()
@@ -77,8 +77,6 @@ pub fn BookmarkletInstall() -> impl IntoView {
                                 <a
                                     href=href
                                     class="bookmarklet-link"
-                                    // Prevent accidental navigation on click.
-                                    on:click=|ev| ev.prevent_default()
                                 >
                                     "📌 Save to Procastimarks"
                                 </a>
