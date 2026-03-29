@@ -32,6 +32,10 @@ use tracing::warn;
 pub use crate::domain::Metadata;
 
 /// Fetches metadata from a remote URL, enforcing C-7 SSRF mitigations.
+///
+/// Cheaply cloneable — the underlying `reqwest::Client` uses an `Arc`-backed
+/// connection pool, so cloning a `MetadataFetcher` shares the same pool.
+#[derive(Clone)]
 pub struct MetadataFetcher {
     client: reqwest::Client,
 }

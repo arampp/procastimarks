@@ -141,12 +141,17 @@ pub async fn get_api_key() -> Result<String, ServerFnError> {
 /// where `title` is the raw URL and `description` is empty (AC-1.3).
 ///
 /// This is a thin server-side wrapper around `MetadataFetcher::fetch`.
+/// The `MetadataFetcher` (and its underlying `reqwest::Client`) is built once
+/// at startup and injected into the Leptos context — it is **not** constructed
+/// on each call.
 #[server(FetchMetadata, "/api")]
 pub async fn fetch_metadata(url: String) -> Result<crate::domain::Metadata, ServerFnError> {
     use crate::metadata::MetadataFetcher;
 
-    let fetcher = MetadataFetcher::new().map_err(|e| {
-        ServerFnError::<server_fn::error::NoCustomError>::ServerError(e.to_string())
+    let fetcher = use_context::<MetadataFetcher>().ok_or_else(|| {
+        ServerFnError::<server_fn::error::NoCustomError>::ServerError(
+            "MetadataFetcher not found in context".to_string(),
+        )
     })?;
     Ok(fetcher.fetch(&url).await)
 }

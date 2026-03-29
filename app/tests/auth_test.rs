@@ -12,6 +12,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use procastimarks::create_router_with_state;
+use procastimarks::metadata::MetadataFetcher;
 use procastimarks::middleware::auth::AppState;
 use procastimarks::persistence::{BookmarkRepository};
 use procastimarks::session;
@@ -36,6 +37,7 @@ fn test_state() -> AppState {
         api_key: Arc::from(TEST_API_KEY),
         sessions: session::new_store(),
         repo: test_repo(),
+        metadata_fetcher: MetadataFetcher::new().expect("MetadataFetcher must build"),
     }
 }
 
