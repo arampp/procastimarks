@@ -35,9 +35,18 @@ pub fn TagInput(
     let prefix = RwSignal::new(String::new());
 
     // Reactive resource: re-fetches whenever `prefix` changes.
+    // Short-circuit to an empty list when the prefix is empty so we don't
+    // issue a needless server/DB round-trip on initial render and after a
+    // tag is added (the dropdown is hidden anyway when the prefix is empty).
     let suggestions = Resource::new(
         move || prefix.get(),
-        |p| async move { fetch_tags(p).await.unwrap_or_default() },
+        |p| async move {
+            if p.is_empty() {
+                Vec::new()
+            } else {
+                fetch_tags(p).await.unwrap_or_default()
+            }
+        },
     );
 
     // Add a tag to the list when the user selects a suggestion.

@@ -23,6 +23,7 @@ use axum::{
 };
 use subtle::ConstantTimeEq;
 
+use crate::metadata::MetadataFetcher;
 use crate::persistence::BookmarkRepository;
 use crate::session::{self, SessionStore};
 
@@ -38,6 +39,9 @@ pub struct AppState {
     pub sessions: SessionStore,
     /// Bookmark repository — shared database connection.
     pub repo: BookmarkRepository,
+    /// Metadata fetcher — built once at startup; the underlying
+    /// `reqwest::Client` is `Arc`-backed and safe to share across requests.
+    pub metadata_fetcher: MetadataFetcher,
 }
 
 /// Routes that are accessible without any credentials (C-2).

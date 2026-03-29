@@ -22,7 +22,6 @@ pub mod persistence;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod routes;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod server_fns;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -50,10 +49,14 @@ pub fn create_router(repo: persistence::BookmarkRepository) -> axum::Router {
 
     let api_key: Arc<str> = api_key_str.into();
 
+    let metadata_fetcher = metadata::MetadataFetcher::new()
+        .unwrap_or_else(|e| panic!("Failed to build MetadataFetcher: {e}"));
+
     let state = AppState {
         api_key,
         sessions: session::new_store(),
         repo,
+        metadata_fetcher,
     };
 
     build_router(state)
@@ -81,22 +84,26 @@ fn build_router(state: middleware::auth::AppState) -> axum::Router {
 
     let routes = generate_route_list(app::App);
 
-    // Clone the repo and api_key so the closure can capture them by value.
+    // Clone the repo, api_key, and metadata_fetcher so the closure can
+    // capture them by value.
     let repo = state.repo.clone();
     let api_key = state.api_key.clone();
+    let metadata_fetcher = state.metadata_fetcher.clone();
 
     axum::Router::new()
         // Public health check — no authentication required (C-2).
         .route("/health", get(routes::health::handler))
         // Leptos server functions are mounted automatically at /api/;
-        // `leptos_routes_with_context` injects the BookmarkRepository and the
-        // API key into every server function's Leptos context.
+        // `leptos_routes_with_context` injects the BookmarkRepository, the
+        // API key, and the MetadataFetcher into every server function's
+        // Leptos context.
         .leptos_routes_with_context(
             &leptos_options,
             routes,
             move || {
                 leptos::context::provide_context(repo.clone());
                 leptos::context::provide_context(api_key.clone());
+                leptos::context::provide_context(metadata_fetcher.clone());
             },
             {
                 let leptos_options = leptos_options.clone();
