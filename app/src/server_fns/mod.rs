@@ -111,11 +111,18 @@ pub async fn fetch_tags(prefix: String) -> Result<Vec<String>, ServerFnError> {
 
     // `fetch_tags` acquires a `std::sync::Mutex`; run on a blocking thread.
     tokio::task::spawn_blocking(move || {
-        repo.fetch_tags(&prefix)
-            .map_err(|e| ServerFnError::<server_fn::error::NoCustomError>::ServerError(e.to_string()))
+        repo.fetch_tags(&prefix).map_err(|e| {
+            // Log the full detail server-side; never send internal DB errors
+            // over the wire to the browser.
+            tracing::error!(error = %e, "fetch_tags: repository error");
+            ServerFnError::<server_fn::error::NoCustomError>::ServerError("Internal".to_string())
+        })
     })
     .await
-    .map_err(|e| ServerFnError::<server_fn::error::NoCustomError>::ServerError(e.to_string()))?
+    .map_err(|e| {
+        tracing::error!(error = %e, "fetch_tags: spawn_blocking join error");
+        ServerFnError::<server_fn::error::NoCustomError>::ServerError("Internal".to_string())
+    })?
 }
 
 /// Return the configured `API_KEY` to authenticated clients.

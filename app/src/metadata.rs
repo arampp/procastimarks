@@ -37,7 +37,8 @@ pub use crate::domain::Metadata;
 ///
 /// Responses with a `Content-Length` header exceeding this limit are rejected
 /// before any bytes are read.  For responses without `Content-Length` the
-/// streaming read is truncated once this many bytes have been consumed.
+/// streaming read is stopped as soon as the running total would exceed this
+/// limit, and the fallback is returned immediately (no partial content parsed).
 const MAX_BODY_BYTES: usize = 1024 * 1024; // 1 MiB
 
 /// Fetches metadata from a remote URL, enforcing C-7 SSRF mitigations.
@@ -134,8 +135,8 @@ impl MetadataFetcher {
     /// HTTP + parse code path against a local mock server.
     ///
     /// Responses whose `Content-Length` exceeds `MAX_BODY_BYTES`, or whose
-    /// streamed body exceeds `MAX_BODY_BYTES`, are rejected and return the
-    /// fallback.
+    /// streamed body would exceed `MAX_BODY_BYTES`, are rejected and return the
+    /// fallback immediately.  No partial content is parsed.
     async fn fetch_and_parse(&self, url: &str) -> Metadata {
         let fallback = Metadata {
             title: url.to_string(),
@@ -178,15 +179,13 @@ impl MetadataFetcher {
         loop {
             match stream.chunk().await {
                 Ok(Some(chunk)) => {
-                    let remaining = MAX_BODY_BYTES.saturating_sub(buf.len());
-                    if chunk.len() > remaining {
+                    if buf.len() + chunk.len() > MAX_BODY_BYTES {
                         warn!(
                             url,
                             max = MAX_BODY_BYTES,
-                            "MetadataFetcher: body exceeds size limit, truncating"
+                            "MetadataFetcher: body exceeds size limit, rejecting"
                         );
-                        buf.extend_from_slice(&chunk[..remaining]);
-                        break;
+                        return fallback;
                     }
                     buf.extend_from_slice(&chunk);
                 }
