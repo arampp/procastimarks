@@ -76,13 +76,20 @@ pub async fn save_bookmark(
             Ok(InsertResult::DuplicateUrl) => {
                 Err(ServerFnError::WrappedServerError(SaveBookmarkError::DuplicateUrl))
             }
-            Err(e) => Err(ServerFnError::WrappedServerError(
-                SaveBookmarkError::Internal(e.to_string()),
-            )),
+            Err(e) => {
+                // Log the detail server-side; the wire format of
+                // `SaveBookmarkError::Internal` is the opaque token
+                // "Internal" so the raw DB error never reaches the browser.
+                tracing::error!(error = %e, "save_bookmark: database error");
+                Err(ServerFnError::WrappedServerError(
+                    SaveBookmarkError::Internal(e.to_string()),
+                ))
+            }
         }
     })
     .await
     .map_err(|e| {
+        tracing::error!(error = %e, "save_bookmark: spawn_blocking join error");
         ServerFnError::WrappedServerError(SaveBookmarkError::Internal(e.to_string()))
     })?
 }

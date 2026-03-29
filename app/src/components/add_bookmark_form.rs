@@ -18,7 +18,6 @@
 use leptos::prelude::*;
 use leptos_router::hooks::{use_navigate, use_query_map};
 
-use crate::domain::SaveBookmarkError;
 use crate::server_fns::{fetch_metadata, fetch_tags};
 
 // ── TagInput ─────────────────────────────────────────────────────────────────
@@ -206,13 +205,18 @@ pub fn AddBookmarkForm(
                 }
                 Err(ref e) => {
                     let msg = match e {
-                        leptos::prelude::ServerFnError::WrappedServerError(
-                            SaveBookmarkError::DuplicateUrl,
-                        ) => "This URL is already saved.".to_string(),
-                        leptos::prelude::ServerFnError::WrappedServerError(
-                            SaveBookmarkError::Internal(_),
-                        ) => "An unexpected error occurred while saving the bookmark.".to_string(),
-                        other => format!("Error: {other}"),
+                        leptos::prelude::ServerFnError::WrappedServerError(inner) => {
+                            // Use the shared `user_message()` helper so copy
+                            // is defined in a single place and never leaks
+                            // internal error details to the browser.
+                            inner.user_message().to_string()
+                        }
+                        _ => {
+                            // Unknown transport / framework errors: show a
+                            // generic message; never surface raw error details.
+                            "An unexpected error occurred while saving the bookmark."
+                                .to_string()
+                        }
                     };
                     error_msg.set(Some(msg));
                 }
