@@ -70,16 +70,23 @@ pub fn normalise_tags(raw: &[impl AsRef<str>]) -> Vec<String> {
 ///
 /// `Display` and `FromStr` are implemented to satisfy the
 /// `ServerFnErrorSerde` trait bound required by Leptos server functions that
-/// use a custom error type.  The wire format is the `Display` string; for
-/// `Internal` the payload is encoded after a `':'` separator so that the
-/// original message round-trips faithfully.
+/// use a custom error type.  The wire format is the `Display` string.
+///
+/// **Security note:** the `Internal` variant carries the raw error detail as
+/// a field for server-side logging, but the `Display` implementation emits
+/// only the opaque token `"Internal"` so that internal database error messages
+/// are never sent to the browser.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 pub enum SaveBookmarkError {
     /// The URL already exists in the database.
     #[error("DuplicateUrl")]
     DuplicateUrl,
     /// An unexpected server-side error occurred.
-    #[error("Internal:{0}")]
+    ///
+    /// The `String` field contains the full error message for server-side
+    /// logging only; it is **not** transmitted to the client (the wire format
+    /// is the fixed token `"Internal"`).
+    #[error("Internal")]
     Internal(String),
 }
 
@@ -90,8 +97,10 @@ impl std::str::FromStr for SaveBookmarkError {
         if s == "DuplicateUrl" {
             return Ok(SaveBookmarkError::DuplicateUrl);
         }
-        if let Some(msg) = s.strip_prefix("Internal:") {
-            return Ok(SaveBookmarkError::Internal(msg.to_owned()));
+        if s == "Internal" {
+            // The detail is intentionally not transmitted; reconstruct with an
+            // empty string so the type round-trips without leaking internals.
+            return Ok(SaveBookmarkError::Internal(String::new()));
         }
         Err(format!("unknown SaveBookmarkError variant: {s}"))
     }
@@ -160,5 +169,43 @@ mod tests {
     fn normalises_mixed_input() {
         let result = normalise_tags(&["  Rust ", "rust", "", "  LEPTOS "]);
         assert_eq!(result, vec!["rust", "leptos"]);
+    }
+
+    // ── SaveBookmarkError wire format ─────────────────────────────────────────
+
+    /// The wire format of `DuplicateUrl` is the exact token "DuplicateUrl".
+    #[test]
+    fn duplicate_url_display_is_opaque_token() {
+        assert_eq!(SaveBookmarkError::DuplicateUrl.to_string(), "DuplicateUrl");
+    }
+
+    /// The wire format of `Internal` is the fixed opaque token "Internal",
+    /// regardless of the detail string, so DB errors never reach the browser.
+    #[test]
+    fn internal_display_does_not_leak_detail() {
+        let err = SaveBookmarkError::Internal("rusqlite: disk I/O error".to_string());
+        let wire = err.to_string();
+        assert_eq!(
+            wire, "Internal",
+            "Internal wire format must not include detail"
+        );
+        assert!(
+            !wire.contains("rusqlite"),
+            "Internal wire format must not contain the error detail"
+        );
+    }
+
+    /// `Internal` round-trips through `FromStr` with an empty detail field.
+    #[test]
+    fn internal_from_str_round_trips_without_detail() {
+        let parsed = "Internal".parse::<SaveBookmarkError>().unwrap();
+        assert_eq!(parsed, SaveBookmarkError::Internal(String::new()));
+    }
+
+    /// `DuplicateUrl` round-trips through `FromStr`.
+    #[test]
+    fn duplicate_url_from_str_round_trips() {
+        let parsed = "DuplicateUrl".parse::<SaveBookmarkError>().unwrap();
+        assert_eq!(parsed, SaveBookmarkError::DuplicateUrl);
     }
 }

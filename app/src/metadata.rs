@@ -12,13 +12,15 @@
 ///
 /// # ATAM Mandatory Condition C-7
 ///
-/// The fetcher **must** enforce all three SSRF mitigations before issuing any
+/// The fetcher **must** enforce all four SSRF mitigations before issuing any
 /// network request:
 ///
 /// 1. **Scheme validation** — only `http` and `https` are accepted.
 /// 2. **Private-IP rejection** — the hostname is resolved to an IP address;
 ///    RFC-1918 addresses and loopback addresses are rejected.
 /// 3. **Timeout** — the HTTP client enforces a 5-second total request timeout.
+/// 4. **Redirect policy** — automatic redirects are disabled so a 30x response
+///    to a private address cannot bypass the private-IP guard.
 use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
 use std::time::Duration;
 
@@ -31,6 +33,13 @@ use tracing::warn;
 /// the domain module.
 pub use crate::domain::Metadata;
 
+/// Maximum response body size accepted by the metadata fetcher (1 MiB).
+///
+/// Responses with a `Content-Length` header exceeding this limit are rejected
+/// before any bytes are read.  For responses without `Content-Length` the
+/// streaming read is truncated once this many bytes have been consumed.
+const MAX_BODY_BYTES: usize = 1024 * 1024; // 1 MiB
+
 /// Fetches metadata from a remote URL, enforcing C-7 SSRF mitigations.
 ///
 /// Cheaply cloneable — the underlying `reqwest::Client` uses an `Arc`-backed
@@ -41,13 +50,18 @@ pub struct MetadataFetcher {
 }
 
 impl MetadataFetcher {
-    /// Construct a fetcher with a 5-second timeout (C-7).
+    /// Construct a fetcher with a 5-second timeout and no automatic redirects
+    /// (C-7).
+    ///
+    /// Redirects are disabled so that a 30x response pointing to a private or
+    /// loopback address cannot bypass the private-IP SSRF guard.
     ///
     /// Returns `Err` if the underlying TLS backend fails to initialise rather
     /// than panicking.
     pub fn new() -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build reqwest client: {e}"))?;
         Ok(Self { client })
@@ -118,6 +132,10 @@ impl MetadataFetcher {
     /// Called from `fetch` after all SSRF mitigations have passed.
     /// Also called directly from tests that bypass the SSRF guard to test the
     /// HTTP + parse code path against a local mock server.
+    ///
+    /// Responses whose `Content-Length` exceeds `MAX_BODY_BYTES`, or whose
+    /// streamed body exceeds `MAX_BODY_BYTES`, are rejected and return the
+    /// fallback.
     async fn fetch_and_parse(&self, url: &str) -> Metadata {
         let fallback = Metadata {
             title: url.to_string(),
@@ -141,13 +159,47 @@ impl MetadataFetcher {
             return fallback;
         }
 
-        let body = match response.text().await {
-            Ok(b) => b,
-            Err(e) => {
-                warn!(url, error = %e, "MetadataFetcher: failed to read response body");
+        // Reject up-front if Content-Length is declared and exceeds the cap.
+        if let Some(len) = response.content_length() {
+            if len > MAX_BODY_BYTES as u64 {
+                warn!(
+                    url,
+                    content_length = len,
+                    max = MAX_BODY_BYTES,
+                    "MetadataFetcher: Content-Length exceeds limit, rejecting"
+                );
                 return fallback;
             }
-        };
+        }
+
+        // Stream the body and stop reading once MAX_BODY_BYTES is consumed.
+        let mut buf: Vec<u8> = Vec::with_capacity(MAX_BODY_BYTES.min(64 * 1024));
+        let mut stream = response;
+        loop {
+            match stream.chunk().await {
+                Ok(Some(chunk)) => {
+                    let remaining = MAX_BODY_BYTES.saturating_sub(buf.len());
+                    if chunk.len() > remaining {
+                        warn!(
+                            url,
+                            max = MAX_BODY_BYTES,
+                            "MetadataFetcher: body exceeds size limit, truncating"
+                        );
+                        buf.extend_from_slice(&chunk[..remaining]);
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk);
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    warn!(url, error = %e, "MetadataFetcher: failed to read response body");
+                    return fallback;
+                }
+            }
+        }
+
+        // Convert bytes to string, replacing any invalid UTF-8 sequences.
+        let body = String::from_utf8_lossy(&buf).into_owned();
 
         extract_metadata(&body, url)
     }
@@ -568,6 +620,64 @@ mod tests {
 
         let meta = fetcher.fetch_and_parse(&url).await;
         assert_eq!(meta.title, "Only Title");
+        assert_eq!(meta.description, "");
+    }
+
+    /// C-7: a response with Content-Length above the cap returns fallback.
+    #[tokio::test]
+    async fn oversized_content_length_returns_fallback() {
+        use httpmock::prelude::*;
+
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/huge");
+            then.status(200)
+                .header("content-type", "text/html")
+                // Declare a body larger than MAX_BODY_BYTES (1 MiB + 1 byte).
+                .header("content-length", &(MAX_BODY_BYTES + 1).to_string())
+                .body("x");
+        });
+
+        let url = server.url("/huge");
+        let fetcher = MetadataFetcher::with_client(
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+        );
+
+        let meta = fetcher.fetch_and_parse(&url).await;
+        assert_eq!(meta.title, url, "oversized Content-Length must return fallback");
+        assert_eq!(meta.description, "");
+    }
+
+    /// C-7: a 301 redirect to an internal address must NOT be followed.
+    #[tokio::test]
+    async fn redirect_to_private_ip_is_not_followed() {
+        use httpmock::prelude::*;
+
+        let server = MockServer::start();
+        // The mock redirects to 10.0.0.1 — a private address.
+        server.mock(|when, then| {
+            when.method(GET).path("/redirect");
+            then.status(301)
+                .header("location", "http://10.0.0.1/secret");
+        });
+
+        let url = server.url("/redirect");
+        // Use a client with redirects disabled (matching MetadataFetcher::new).
+        let fetcher = MetadataFetcher::with_client(
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+        );
+
+        let meta = fetcher.fetch_and_parse(&url).await;
+        // 301 is not a 2xx success — fetch_and_parse must return the fallback.
+        assert_eq!(meta.title, url, "redirect response must return fallback");
         assert_eq!(meta.description, "");
     }
 }
