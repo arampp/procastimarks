@@ -6,10 +6,10 @@
 ///
 /// # Design decisions
 ///
-/// * **`Arc<Mutex<Connection>>`** — `rusqlite::Connection` is not `Send` when
-///   compiled without the `unlock_notify` feature, so we wrap it in a `Mutex`
-///   rather than a `RwLock`.  A single SQLite file in WAL mode allows one
-///   writer at a time; the `Mutex` enforces this at the Rust level.
+/// * **`Arc<Mutex<Connection>>`** — `rusqlite::Connection` is not `Sync`, so a
+///   `Mutex` is required to share a single connection across threads safely.
+///   A single SQLite file in WAL mode allows one writer at a time; the
+///   `Mutex` enforces this at the Rust level.
 ///
 /// * **`ON CONFLICT(url) DO NOTHING`** — The UNIQUE constraint on `url` is the
 ///   canonical source of truth for duplicate detection.  `rows_affected()` is
