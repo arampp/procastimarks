@@ -252,6 +252,12 @@ pub(crate) fn is_private_or_loopback(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_private_v4(v4),
         IpAddr::V6(v6) => {
+            // IPv6-mapped IPv4 addresses (::ffff:0:0/96) — e.g. ::ffff:127.0.0.1.
+            // These present as IPv6 but resolve to an IPv4 address; apply the
+            // same IPv4 private/loopback checks to prevent SSRF bypass.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_private_v4(v4);
+            }
             // ::1 loopback
             if v6.is_loopback() {
                 return true;
@@ -468,6 +474,51 @@ mod tests {
     fn rejects_ipv4_link_local() {
         assert!(is_private_v4(Ipv4Addr::new(169, 254, 0, 1)));
         assert!(is_private_v4(Ipv4Addr::new(169, 254, 255, 254)));
+    }
+
+    /// IPv6-mapped IPv4 loopback (::ffff:127.0.0.1) must be rejected.
+    ///
+    /// Without this check a URL like `http://[::ffff:127.0.0.1]/` would
+    /// present as IPv6 and bypass the RFC-1918/loopback guards.
+    #[test]
+    fn rejects_ipv6_mapped_ipv4_loopback() {
+        use std::net::Ipv6Addr;
+        // ::ffff:127.0.0.1 — IPv6-mapped loopback.
+        let mapped: Ipv6Addr = "::ffff:127.0.0.1".parse().unwrap();
+        assert!(
+            is_private_or_loopback(IpAddr::V6(mapped)),
+            "::ffff:127.0.0.1 must be rejected as loopback"
+        );
+    }
+
+    /// IPv6-mapped RFC-1918 addresses must be rejected.
+    #[test]
+    fn rejects_ipv6_mapped_ipv4_private() {
+        use std::net::Ipv6Addr;
+        // ::ffff:10.0.0.1 — IPv6-mapped 10.x.x.x.
+        let mapped_10: Ipv6Addr = "::ffff:10.0.0.1".parse().unwrap();
+        assert!(
+            is_private_or_loopback(IpAddr::V6(mapped_10)),
+            "::ffff:10.0.0.1 must be rejected as RFC-1918"
+        );
+        // ::ffff:192.168.1.1 — IPv6-mapped 192.168.x.x.
+        let mapped_192: Ipv6Addr = "::ffff:192.168.1.1".parse().unwrap();
+        assert!(
+            is_private_or_loopback(IpAddr::V6(mapped_192)),
+            "::ffff:192.168.1.1 must be rejected as RFC-1918"
+        );
+    }
+
+    /// IPv6-mapped public IPv4 addresses must NOT be rejected.
+    #[test]
+    fn accepts_ipv6_mapped_public_ipv4() {
+        use std::net::Ipv6Addr;
+        // ::ffff:93.184.216.34 — IPv6-mapped example.com.
+        let mapped_public: Ipv6Addr = "::ffff:93.184.216.34".parse().unwrap();
+        assert!(
+            !is_private_or_loopback(IpAddr::V6(mapped_public)),
+            "::ffff:93.184.216.34 must not be rejected (public address)"
+        );
     }
 
     // ── MetadataFetcher::fetch — SSRF guard (no network) ─────────────────────
