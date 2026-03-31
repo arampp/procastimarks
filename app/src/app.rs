@@ -8,7 +8,7 @@ use leptos_router::{
     path,
 };
 
-use crate::components::{AddBookmarkPage, BookmarkletInstall};
+use crate::components::{AddBookmarkPage, BookmarkList, BookmarkletInstall};
 
 /// Root component — sets up routing and metadata context.
 #[component]
@@ -19,21 +19,10 @@ pub fn App() -> impl IntoView {
         <Title text="Procastimarks"/>
         <Router>
             <Routes fallback=|| view! { <p>"Page not found."</p> }>
-                <Route path=path!("/") view=HomePage/>
+                <Route path=path!("/") view=BookmarkList/>
                 <Route path=path!("/add") view=AddBookmarkPage/>
+                <Route path=path!("/bookmarklet") view=BookmarkletInstall/>
             </Routes>
         </Router>
-    }
-}
-
-/// Placeholder home page — replaced by BookmarkList in EPIC-4.
-#[component]
-fn HomePage() -> impl IntoView {
-    view! {
-        <main>
-            <h1>"Procastimarks"</h1>
-            <p>"No bookmarks yet. Use the bookmarklet to save your first one."</p>
-            <BookmarkletInstall/>
-        </main>
     }
 }

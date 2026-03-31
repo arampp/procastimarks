@@ -9,6 +9,12 @@
 ///   HTTP call to the corresponding `/api/…` endpoint; the original body is
 ///   not compiled for `wasm32`.
 ///
+/// # US-10 (#16) — Bookmark List View
+///
+/// `list_bookmarks` satisfies:
+/// * AC-2.1: bookmarks returned newest first.
+/// * AC-2.2: all fields (url, title, description, tags, created_at) included.
+///
 /// # US-9 (#15) — Save Bookmark
 ///
 /// `save_bookmark` satisfies:
@@ -27,7 +33,37 @@
 /// * AC-4.3: no match returns an empty list.
 use leptos::prelude::*;
 
-use crate::domain::SaveBookmarkError;
+use crate::domain::{Bookmark, SaveBookmarkError};
+
+/// Return all saved bookmarks ordered newest first.
+///
+/// Delegates to `BookmarkRepository::list` on a blocking thread to avoid
+/// stalling the Tokio worker pool.
+///
+/// Satisfies AC-2.1 (reverse-chronological order) and AC-2.2 (all fields).
+#[server(ListBookmarks, "/api")]
+pub async fn list_bookmarks() -> Result<Vec<Bookmark>, ServerFnError> {
+    use crate::persistence::BookmarkRepository;
+
+    let repo = use_context::<BookmarkRepository>().ok_or_else(|| {
+        ServerFnError::<server_fn::error::NoCustomError>::ServerError(
+            "BookmarkRepository not found in context".to_string(),
+        )
+    })?;
+
+    tokio::task::spawn_blocking(move || {
+        repo.list().map_err(|e| {
+            tracing::error!(error = %e, "list_bookmarks: repository error");
+            ServerFnError::<server_fn::error::NoCustomError>::ServerError("Internal".to_string())
+        })
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "list_bookmarks: spawn_blocking join error");
+        ServerFnError::<server_fn::error::NoCustomError>::ServerError("Internal".to_string())
+    })?
+}
+
 
 /// Persist a new bookmark.
 ///
