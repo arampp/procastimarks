@@ -125,8 +125,9 @@ Entry point for every incoming request.
 
 Interfaces::
 * `GET /health` — public health check, bypasses auth middleware.
-* `GET /` — main list view (Leptos route).
+* `GET /` — main list view (Leptos route, `BookmarkList` component).
 * `GET /add` — add-bookmark form (Leptos route).
+* `GET /bookmarklet` — bookmarklet installation page (Leptos route).
 * `POST /api/*` — Leptos server function endpoints (auto-generated).
 * `GET /pkg/*` — static WASM bundle and assets.
 
