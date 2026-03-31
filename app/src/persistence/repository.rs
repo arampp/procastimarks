@@ -143,6 +143,118 @@ impl BookmarkRepository {
         Ok(bookmarks)
     }
 
+    /// Search bookmarks by full-text query and/or tag filter (arc42 §8).
+    ///
+    /// Behaviour matrix:
+    ///
+    /// | `query` | `tag`    | SQL strategy                                          |
+    /// |---------|----------|-------------------------------------------------------|
+    /// | empty   | `None`   | `SELECT … ORDER BY created_at DESC` (same as `list`) |
+    /// | empty   | `Some`   | `json_each` tag filter only                           |
+    /// | non-empty | `None` | FTS5 `MATCH` with BM25 ranking                        |
+    /// | non-empty | `Some` | FTS5 `MATCH` AND `json_each` tag filter               |
+    ///
+    /// Satisfies:
+    /// * AC-3.1 — keyword filters the list.
+    /// * AC-3.2 — search matches across title, description, comment, tags.
+    /// * AC-3.3 — no match returns an empty vec.
+    /// * AC-3.4 — empty query returns all bookmarks, newest first.
+    /// * AC-3.5 — query + tag applied with AND logic.
+    /// * UC-4   — tag filter narrows the list.
+    pub fn search(&self, query: &str, tag: Option<&str>) -> anyhow::Result<Vec<Bookmark>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("DB mutex poisoned"))?;
+
+        let query_trimmed = query.trim();
+
+        match (query_trimmed.is_empty(), tag) {
+            // ── Case 1: no query, no tag → list all ──────────────────────────
+            (true, None) => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, url, title, description, tags, comment, created_at
+                         FROM bookmarks
+                         ORDER BY created_at DESC",
+                    )
+                    .context("Failed to prepare list statement in search")?;
+
+                let bookmarks = stmt
+                    .query_map([], row_to_bookmark)
+                    .context("Failed to execute list query in search")?
+                    .collect::<Result<Vec<_>, _>>()
+                    .context("Failed to collect list results in search")?;
+
+                Ok(bookmarks)
+            }
+
+            // ── Case 2: no query, tag filter only ────────────────────────────
+            (true, Some(tag_val)) => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT b.id, b.url, b.title, b.description, b.tags, b.comment, b.created_at
+                         FROM bookmarks b, json_each(b.tags)
+                         WHERE json_each.value = ?1
+                         ORDER BY b.created_at DESC",
+                    )
+                    .context("Failed to prepare tag-filter statement")?;
+
+                let bookmarks = stmt
+                    .query_map(params![tag_val], row_to_bookmark)
+                    .context("Failed to execute tag-filter query")?
+                    .collect::<Result<Vec<_>, _>>()
+                    .context("Failed to collect tag-filter results")?;
+
+                Ok(bookmarks)
+            }
+
+            // ── Case 3: FTS5 query, no tag ────────────────────────────────────
+            (false, None) => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT b.id, b.url, b.title, b.description, b.tags, b.comment, b.created_at
+                         FROM bookmarks b
+                         JOIN bookmarks_fts f ON f.rowid = b.id
+                         WHERE bookmarks_fts MATCH ?1
+                         ORDER BY rank",
+                    )
+                    .context("Failed to prepare FTS5 statement")?;
+
+                let bookmarks = stmt
+                    .query_map(params![query_trimmed], row_to_bookmark)
+                    .context("Failed to execute FTS5 query")?
+                    .collect::<Result<Vec<_>, _>>()
+                    .context("Failed to collect FTS5 results")?;
+
+                Ok(bookmarks)
+            }
+
+            // ── Case 4: FTS5 query AND tag filter ─────────────────────────────
+            (false, Some(tag_val)) => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT b.id, b.url, b.title, b.description, b.tags, b.comment, b.created_at
+                         FROM bookmarks b
+                         JOIN bookmarks_fts f ON f.rowid = b.id,
+                         json_each(b.tags)
+                         WHERE bookmarks_fts MATCH ?1
+                           AND json_each.value = ?2
+                         ORDER BY rank",
+                    )
+                    .context("Failed to prepare combined FTS5+tag statement")?;
+
+                let bookmarks = stmt
+                    .query_map(params![query_trimmed, tag_val], row_to_bookmark)
+                    .context("Failed to execute combined FTS5+tag query")?
+                    .collect::<Result<Vec<_>, _>>()
+                    .context("Failed to collect combined FTS5+tag results")?;
+
+                Ok(bookmarks)
+            }
+        }
+    }
+
     /// Return all distinct tags whose value starts with `prefix`, sorted
     /// alphabetically.
     ///
@@ -463,5 +575,157 @@ mod tests {
 
         let bookmarks = repo.list().unwrap();
         assert_eq!(bookmarks[0].tags, vec!["alpha", "beta", "gamma"]);
+    }
+
+    // ── search ────────────────────────────────────────────────────────────────
+
+    /// Helper: seed three bookmarks with distinct content.
+    fn seed_search_data(repo: &BookmarkRepository) {
+        repo.insert(
+            "https://rust-lang.org",
+            "Rust Async Programming",
+            "Guide to async/await.",
+            &["rust", "async"],
+            "Great intro.",
+        )
+        .unwrap();
+        repo.insert(
+            "https://pandas.pydata.org",
+            "Python Data Science",
+            "Pandas and NumPy guide.",
+            &["python", "data"],
+            "",
+        )
+        .unwrap();
+        repo.insert(
+            "https://docker.com",
+            "Introduction to Docker",
+            "Container basics.",
+            &["docker", "devops"],
+            "Read chapter 3.",
+        )
+        .unwrap();
+    }
+
+    /// AC-3.4 baseline: empty query, no tag → all bookmarks, newest first.
+    #[test]
+    fn search_empty_query_returns_all_newest_first() {
+        let repo = setup();
+        {
+            let conn = repo.conn.lock().unwrap();
+            conn.execute_batch(
+                "INSERT INTO bookmarks (url, title, description, tags, comment, created_at)
+                 VALUES
+                   ('https://a.com', 'Oldest', '', '[]', '', '2026-01-01T10:00:00Z'),
+                   ('https://b.com', 'Newest', '', '[]', '', '2026-03-01T10:00:00Z');",
+            )
+            .unwrap();
+        }
+        let results = repo.search("", None).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "Newest");
+        assert_eq!(results[1].title, "Oldest");
+    }
+
+    /// AC-3.1: typing a keyword filters to matching bookmarks.
+    #[test]
+    fn search_by_keyword_returns_matching_bookmarks() {
+        let repo = setup();
+        seed_search_data(&repo);
+        let results = repo.search("rust", None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Rust Async Programming");
+    }
+
+    /// AC-3.2: search matches across the title field.
+    #[test]
+    fn search_matches_in_title() {
+        let repo = setup();
+        seed_search_data(&repo);
+        let results = repo.search("Docker", None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Introduction to Docker");
+    }
+
+    /// AC-3.2: search matches across the description field.
+    #[test]
+    fn search_matches_in_description() {
+        let repo = setup();
+        seed_search_data(&repo);
+        // "Pandas" appears in the description of "Python Data Science".
+        let results = repo.search("Pandas", None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Python Data Science");
+    }
+
+    /// AC-3.2: search matches across the comment field.
+    #[test]
+    fn search_matches_in_comment() {
+        let repo = setup();
+        seed_search_data(&repo);
+        // "chapter" appears only in the comment for "Introduction to Docker".
+        let results = repo.search("chapter", None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Introduction to Docker");
+    }
+
+    /// AC-3.2: search matches across the tags field.
+    #[test]
+    fn search_matches_in_tags() {
+        let repo = setup();
+        seed_search_data(&repo);
+        // "devops" is a tag on "Introduction to Docker".
+        let results = repo.search("devops", None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Introduction to Docker");
+    }
+
+    /// AC-3.3: no-match search returns an empty vec.
+    #[test]
+    fn search_no_match_returns_empty_vec() {
+        let repo = setup();
+        seed_search_data(&repo);
+        let results = repo.search("haskell", None).unwrap();
+        assert!(results.is_empty());
+    }
+
+    /// UC-4 main scenario: tag filter returns only bookmarks carrying that tag.
+    #[test]
+    fn search_by_tag_returns_only_tagged_bookmarks() {
+        let repo = setup();
+        seed_search_data(&repo);
+        let results = repo.search("", Some("rust")).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Rust Async Programming");
+    }
+
+    /// UC-4 A2: tag that matches no bookmark returns empty vec.
+    #[test]
+    fn search_by_tag_no_match_returns_empty_vec() {
+        let repo = setup();
+        seed_search_data(&repo);
+        let results = repo.search("", Some("haskell")).unwrap();
+        assert!(results.is_empty());
+    }
+
+    /// AC-3.5: search query AND tag filter — AND logic.
+    #[test]
+    fn search_combined_query_and_tag_applies_and_logic() {
+        let repo = setup();
+        seed_search_data(&repo);
+        // "async" matches title AND tag "rust" is set → should return "Rust Async Programming".
+        let results = repo.search("async", Some("rust")).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Rust Async Programming");
+    }
+
+    /// AC-3.5 variant: query matches but tag does not → no results.
+    #[test]
+    fn search_combined_query_matches_but_tag_does_not_returns_empty() {
+        let repo = setup();
+        seed_search_data(&repo);
+        // "async" is in "Rust Async Programming" but that bookmark doesn't have tag "python".
+        let results = repo.search("async", Some("python")).unwrap();
+        assert!(results.is_empty());
     }
 }
