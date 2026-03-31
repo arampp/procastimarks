@@ -22,8 +22,11 @@
 //!   - The `TagFilter` sidebar is present in `GET /`.
 //!   - Seeded bookmarks appear in the SSR-rendered list (initial state = no filter).
 //!   - The AC-2.3 empty-state message is still rendered for an empty database.
-//!   - The AC-3.3 "No bookmarks match your search." text exists in the server
-//!     source (rendered client-side; presence verified via SSR HTML comment).
+//!
+//! Note: AC-3.3 ("No bookmarks match your search.") is rendered client-side
+//! only — Leptos SSR only emits the *active* Suspense branch, so the no-results
+//! message is never present in the SSR HTML.  That acceptance criterion is
+//! therefore covered by the repository unit tests in `persistence/repository.rs`.
 //!
 //! The search query and tag filter signals start empty on each SSR request, so
 //! SSR always renders the full unfiltered list.  Reactive filtering happens
@@ -115,7 +118,7 @@ async fn list_page_contains_search_box() {
     let app = create_router_with_state(test_state_with_repo(repo));
     let (status, body) = get(app, &format!("/{}", auth_query())).await;
 
-    assert_ne!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(status, StatusCode::OK, "GET / must return 200 OK.\nGot:\n{body}");
     assert!(
         body.contains("search-box")
             || body.contains(r#"type="search""#)
@@ -137,7 +140,7 @@ async fn list_page_contains_tag_filter_sidebar() {
     let app = create_router_with_state(test_state_with_repo(repo));
     let (status, body) = get(app, &format!("/{}", auth_query())).await;
 
-    assert_ne!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(status, StatusCode::OK, "GET / must return 200 OK.\nGot:\n{body}");
     assert!(
         body.contains("tag-filter") || body.contains("tag-sidebar") || body.contains("tag-list"),
         "Tag filter sidebar element must be present in GET / HTML.\nGot:\n{body}"
@@ -157,7 +160,7 @@ async fn empty_database_still_renders_no_bookmarks_message() {
     let app = create_router_with_state(test_state_with_repo(repo));
     let (status, body) = get(app, &format!("/{}", auth_query())).await;
 
-    assert_ne!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(status, StatusCode::OK, "GET / must return 200 OK.\nGot:\n{body}");
     assert!(
         body.contains("No bookmarks yet. Use the bookmarklet to save your first one."),
         "Empty-state message must appear when database is empty.\nGot:\n{body}"
@@ -189,7 +192,7 @@ async fn list_page_renders_seeded_bookmarks() {
     let app = create_router_with_state(test_state_with_repo(repo));
     let (status, body) = get(app, &format!("/{}", auth_query())).await;
 
-    assert_ne!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(status, StatusCode::OK, "GET / must return 200 OK.\nGot:\n{body}");
     assert!(
         body.contains("Rust Async Programming"),
         "Rust bookmark must appear in SSR HTML.\nGot:\n{body}"
@@ -224,7 +227,7 @@ async fn list_page_renders_bookmarks_newest_first() {
     let app = create_router_with_state(test_state_with_repo(repo));
     let (status, body) = get(app, &format!("/{}", auth_query())).await;
 
-    assert_ne!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(status, StatusCode::OK, "GET / must return 200 OK.\nGot:\n{body}");
     let pos_newest = body.find("Newest Bookmark").expect("Newest Bookmark must appear");
     let pos_oldest = body.find("Oldest Bookmark").expect("Oldest Bookmark must appear");
     assert!(
@@ -244,7 +247,7 @@ async fn tag_filter_sidebar_renders_tags_from_seeded_bookmarks() {
     let app = create_router_with_state(test_state_with_repo(repo));
     let (status, body) = get(app, &format!("/{}", auth_query())).await;
 
-    assert_ne!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(status, StatusCode::OK, "GET / must return 200 OK.\nGot:\n{body}");
     // At least one known tag from the seeded data must appear in the sidebar.
     assert!(
         body.contains("rust") || body.contains("python") || body.contains("docker"),

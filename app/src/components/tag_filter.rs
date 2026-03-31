@@ -54,6 +54,7 @@ pub fn TagFilter(
                                 let tag_for_aria = tag.clone();
                                 view! {
                                     <button
+                                        type="button"
                                         class=move || {
                                             if active_tag.get().as_deref() == Some(&tag_for_class) {
                                                 "tag-item tag-item--active"
