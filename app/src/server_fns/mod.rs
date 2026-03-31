@@ -9,6 +9,15 @@
 ///   HTTP call to the corresponding `/api/…` endpoint; the original body is
 ///   not compiled for `wasm32`.
 ///
+/// # US-11 (#17) — Full-text search
+///
+/// `search_bookmarks` satisfies:
+/// * AC-3.1: keyword filters the list reactively.
+/// * AC-3.2: search matches across title, description, comment, and tags.
+/// * AC-3.3: no match returns an empty vec (UI shows "No bookmarks match your search.").
+/// * AC-3.4: empty query returns all bookmarks newest first.
+/// * AC-3.5: query + tag applied with AND logic.
+///
 /// # US-10 (#16) — Bookmark List View
 ///
 /// `list_bookmarks` satisfies:
@@ -60,6 +69,42 @@ pub async fn list_bookmarks() -> Result<Vec<Bookmark>, ServerFnError> {
     .await
     .map_err(|e| {
         tracing::error!(error = %e, "list_bookmarks: spawn_blocking join error");
+        ServerFnError::<server_fn::error::NoCustomError>::ServerError("Internal".to_string())
+    })?
+}
+
+/// Search bookmarks by full-text query and/or tag filter.
+///
+/// Delegates to `BookmarkRepository::search` on a blocking thread.
+///
+/// * An empty `query` with `tag = None` returns all bookmarks newest first
+///   (AC-3.4 — clearing the search box restores the full list).
+/// * A non-empty `query` runs an FTS5 `MATCH` search across title, description,
+///   comment, and tags fields (AC-3.1, AC-3.2).
+/// * An empty `query` with `tag = Some(t)` filters by tag only (UC-4).
+/// * Both non-empty applies AND logic (AC-3.5).
+#[server(SearchBookmarks, "/api")]
+pub async fn search_bookmarks(
+    query: String,
+    tag: Option<String>,
+) -> Result<Vec<Bookmark>, ServerFnError> {
+    use crate::persistence::BookmarkRepository;
+
+    let repo = use_context::<BookmarkRepository>().ok_or_else(|| {
+        ServerFnError::<server_fn::error::NoCustomError>::ServerError(
+            "BookmarkRepository not found in context".to_string(),
+        )
+    })?;
+
+    tokio::task::spawn_blocking(move || {
+        repo.search(&query, tag.as_deref()).map_err(|e| {
+            tracing::error!(error = %e, "search_bookmarks: repository error");
+            ServerFnError::<server_fn::error::NoCustomError>::ServerError("Internal".to_string())
+        })
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "search_bookmarks: spawn_blocking join error");
         ServerFnError::<server_fn::error::NoCustomError>::ServerError("Internal".to_string())
     })?
 }

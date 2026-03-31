@@ -5,6 +5,8 @@
 pub mod add_bookmark_form;
 pub mod bookmark_list;
 pub mod bookmarklet;
+pub mod search_box;
+pub mod tag_filter;
 
 pub use add_bookmark_form::AddBookmarkPage;
 pub use bookmark_list::BookmarkList;
