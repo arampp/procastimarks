@@ -51,6 +51,15 @@ impl BookmarkRepository {
         Self { conn }
     }
 
+    /// Return the underlying connection for test helpers that need to seed
+    /// data with explicit timestamps or run raw SQL assertions.
+    ///
+    /// **Not part of the public API** — production code must use the typed
+    /// repository methods.
+    pub fn conn(&self) -> &Arc<Mutex<Connection>> {
+        &self.conn
+    }
+
     /// Insert a new bookmark.
     ///
     /// Tags are normalised (lowercase + trim + deduplicate) before storage.
@@ -101,6 +110,37 @@ impl BookmarkRepository {
             .context("Failed to fetch newly inserted bookmark")?;
 
         Ok(InsertResult::Inserted(bookmark))
+    }
+
+    /// Return all bookmarks ordered by creation date, newest first.
+    ///
+    /// Returns an empty `Vec` when the database contains no bookmarks.
+    /// Each row is mapped through `row_to_bookmark`, which deserialises the
+    /// JSON tag array.
+    ///
+    /// Satisfies AC-2.1 (reverse-chronological order) and AC-2.2 (all fields
+    /// populated).
+    pub fn list(&self) -> anyhow::Result<Vec<Bookmark>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("DB mutex poisoned"))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, url, title, description, tags, comment, created_at
+                 FROM bookmarks
+                 ORDER BY created_at DESC",
+            )
+            .context("Failed to prepare list statement")?;
+
+        let bookmarks = stmt
+            .query_map([], row_to_bookmark)
+            .context("Failed to execute list query")?
+            .collect::<Result<Vec<_>, _>>()
+            .context("Failed to collect list results")?;
+
+        Ok(bookmarks)
     }
 
     /// Return all distinct tags whose value starts with `prefix`, sorted
@@ -341,5 +381,87 @@ mod tests {
 
         let tags = repo.fetch_tags("").unwrap();
         assert_eq!(tags, vec!["axum", "leptos", "rust"]);
+    }
+
+    // ── list ──────────────────────────────────────────────────────────────────
+
+    /// AC-2.3: empty database returns an empty vec (no error).
+    #[test]
+    fn list_returns_empty_vec_when_no_bookmarks() {
+        let repo = setup();
+        let bookmarks = repo.list().unwrap();
+        assert!(bookmarks.is_empty());
+    }
+
+    /// AC-2.1: bookmarks are returned in reverse-chronological order
+    /// (newest first).
+    ///
+    /// SQLite's `created_at` default is `CURRENT_TIMESTAMP` which has
+    /// one-second granularity.  To guarantee ordering in a fast unit test we
+    /// INSERT with explicit timestamps rather than relying on wall-clock time.
+    #[test]
+    fn list_returns_bookmarks_newest_first() {
+        let repo = setup();
+        {
+            let conn = repo.conn.lock().unwrap();
+            conn.execute_batch(
+                "INSERT INTO bookmarks (url, title, description, tags, comment, created_at)
+                 VALUES
+                   ('https://old.example.com',    'Oldest', '', '[]', '', '2026-01-01T10:00:00Z'),
+                   ('https://middle.example.com', 'Middle', '', '[]', '', '2026-02-01T10:00:00Z'),
+                   ('https://new.example.com',    'Newest', '', '[]', '', '2026-03-01T10:00:00Z');",
+            )
+            .unwrap();
+        }
+
+        let bookmarks = repo.list().unwrap();
+        assert_eq!(bookmarks.len(), 3);
+        assert_eq!(bookmarks[0].title, "Newest");
+        assert_eq!(bookmarks[1].title, "Middle");
+        assert_eq!(bookmarks[2].title, "Oldest");
+    }
+
+    /// AC-2.2: all fields (url, title, description, tags, comment, created_at)
+    /// are populated in each returned bookmark.
+    #[test]
+    fn list_returns_all_fields_per_bookmark() {
+        let repo = setup();
+        repo.insert(
+            "https://example.com/full",
+            "Full Bookmark",
+            "A rich description.",
+            &["rust", "leptos"],
+            "My comment",
+        )
+        .unwrap();
+
+        let bookmarks = repo.list().unwrap();
+        assert_eq!(bookmarks.len(), 1);
+
+        let bm = &bookmarks[0];
+        assert_eq!(bm.url, "https://example.com/full");
+        assert_eq!(bm.title, "Full Bookmark");
+        assert_eq!(bm.description, "A rich description.");
+        assert_eq!(bm.tags, vec!["rust", "leptos"]);
+        assert_eq!(bm.comment, "My comment");
+        assert!(!bm.created_at.is_empty());
+        assert!(bm.id > 0);
+    }
+
+    /// Tags stored as a JSON array are deserialised correctly by `list`.
+    #[test]
+    fn list_deserialises_tags_from_json() {
+        let repo = setup();
+        repo.insert(
+            "https://example.com/tags",
+            "Tagged",
+            "",
+            &["alpha", "beta", "gamma"],
+            "",
+        )
+        .unwrap();
+
+        let bookmarks = repo.list().unwrap();
+        assert_eq!(bookmarks[0].tags, vec!["alpha", "beta", "gamma"]);
     }
 }
