@@ -41,6 +41,33 @@ weeks later by topic — not by trying to remember the exact title or address.
 
 ---
 
+## 🚀 Running the App
+
+This is a [Leptos](https://leptos.dev/) full-stack Rust app. You need `cargo-leptos` to build and run it.
+
+```bash
+# Install cargo-leptos (one-time setup)
+cargo install cargo-leptos
+
+# Add the WASM target (one-time setup)
+rustup target add wasm32-unknown-unknown
+
+# Start the dev server with auto-reload on file changes
+cargo leptos watch
+```
+
+The server will be available at `http://localhost:3000`.
+
+For a production build:
+
+```bash
+cargo leptos serve
+```
+
+> **Note:** The app uses `dotenvy` for configuration. Create a `.env` file in the project root if environment variables (e.g. an API key) are required before starting.
+
+---
+
 ## 🧱 Technology Stack
 
 | Layer | Choice |
