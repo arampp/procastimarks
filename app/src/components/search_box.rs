@@ -1,15 +1,17 @@
-/// SearchBox component — debounced keyword search input.
+/// SearchBox component — keyword search input.
 ///
 /// # US-11 (#17) — Full-text search with FTS5 (search-as-you-type)
 ///
 /// Satisfies:
-/// * AC-3.1: typing in the search box triggers `search_bookmarks` with ~300 ms
-///   debounce; the bookmark list updates reactively without a page reload.
+/// * AC-3.1: typing in the search box updates `search_query`, which the parent
+///   (`BookmarkList`) debounces (~300 ms) before triggering `search_bookmarks`,
+///   so the bookmark list updates reactively without a page reload.
 /// * AC-3.4: clearing the search box (empty string) restores the full list.
 ///
-/// The component writes to a shared `RwSignal<String>` owned by the parent
-/// (`BookmarkList`).  The parent is responsible for calling `search_bookmarks`
-/// whenever the query or the active tag changes.
+/// The component writes the raw input value to a shared `RwSignal<String>`
+/// owned by the parent (`BookmarkList`).  The parent is responsible for
+/// debouncing and for calling `search_bookmarks` whenever the query or the
+/// active tag changes.
 use leptos::prelude::*;
 
 /// A controlled search input that writes the current query to `search_query`.

@@ -14,9 +14,10 @@
 /// # US-11 (#17) — Full-text search with FTS5 (search-as-you-type)
 ///
 /// Satisfies:
-/// * AC-3.1: `SearchBox` writes to a shared `search_query` signal; the
-///   `Resource` re-runs `search_bookmarks` whenever the query or `active_tag`
-///   changes, updating the list reactively without a page reload.
+/// * AC-3.1: `SearchBox` writes to a shared `search_query` signal; a separate
+///   `debounced_query` signal (updated after ~300 ms of inactivity) is used as
+///   the `Resource` key so that `search_bookmarks` is not called on every
+///   keystroke, updating the list reactively without a page reload.
 /// * AC-3.3: when `search_bookmarks` returns an empty vec with a non-empty
 ///   query, the message "No bookmarks match your search." is rendered.
 /// * AC-3.4: clearing the search box (empty string) re-runs `search_bookmarks`
@@ -39,6 +40,9 @@ use crate::components::search_box::SearchBox;
 use crate::components::tag_filter::TagFilter;
 use crate::domain::Bookmark;
 use crate::server_fns::search_bookmarks;
+
+/// Debounce delay for the search query in milliseconds (AC-3.1 / AD-3).
+const SEARCH_DEBOUNCE_MS: u64 = 300;
 
 // ── BookmarkEntry ─────────────────────────────────────────────────────────────
 
@@ -94,18 +98,31 @@ pub fn BookmarkEntry(bookmark: Bookmark) -> impl IntoView {
 /// The main bookmark list view rendered at `GET /`.
 ///
 /// Creates shared `search_query` and `active_tag` signals and passes them to
-/// `SearchBox` and `TagFilter`.  A `Resource` re-runs `search_bookmarks`
-/// whenever either signal changes, updating the visible bookmark list
-/// reactively without a page reload.
+/// `SearchBox` and `TagFilter`.  `search_query` is debounced (~300 ms) before
+/// being used as the `Resource` key so that `search_bookmarks` is not called
+/// on every keystroke.
 #[component]
 pub fn BookmarkList() -> impl IntoView {
     // ── Shared reactive state (arc42 §8 — Reactive UI State) ─────────────────
+    // `search_query` is updated on every keystroke (written by SearchBox).
+    // `debounced_query` is updated ~300 ms after the user stops typing so that
+    // `search_bookmarks` is not called on every keystroke (AC-3.1 / AD-3).
     let search_query: RwSignal<String> = RwSignal::new(String::new());
+    let debounced_query: RwSignal<String> = RwSignal::new(String::new());
     let active_tag: RwSignal<Option<String>> = RwSignal::new(None);
 
-    // Re-run search_bookmarks whenever query or tag changes (AC-3.1, UC-4).
+    // Update debounced_query after SEARCH_DEBOUNCE_MS of inactivity.
+    Effect::new(move |_| {
+        let query = search_query.get();
+        set_timeout(
+            move || debounced_query.set(query),
+            std::time::Duration::from_millis(SEARCH_DEBOUNCE_MS),
+        );
+    });
+
+    // Re-run search_bookmarks only when debounced_query or active_tag changes.
     let bookmarks = Resource::new(
-        move || (search_query.get(), active_tag.get()),
+        move || (debounced_query.get(), active_tag.get()),
         |(query, tag)| search_bookmarks(query, tag),
     );
 
