@@ -35,6 +35,7 @@
 /// * AC-3.5: both `search_query` and `active_tag` are passed together to
 ///   `search_bookmarks`; the server function applies AND logic.
 use leptos::prelude::*;
+use leptos_dom::helpers::{set_timeout_with_handle, TimeoutHandle};
 
 use crate::components::search_box::SearchBox;
 use crate::components::tag_filter::TagFilter;
@@ -111,13 +112,25 @@ pub fn BookmarkList() -> impl IntoView {
     let debounced_query: RwSignal<String> = RwSignal::new(String::new());
     let active_tag: RwSignal<Option<String>> = RwSignal::new(None);
 
-    // Update debounced_query after SEARCH_DEBOUNCE_MS of inactivity.
+    // True debounce: cancel any pending timer before scheduling a new one so
+    // that only the value present after SEARCH_DEBOUNCE_MS of inactivity is
+    // applied (AD-3).  `StoredValue` gives shared, reactive-owner–tracked
+    // storage that survives the `move` closure (same pattern used by Leptos'
+    // own `AnimatedShow` component).
+    let timeout_handle: StoredValue<Option<TimeoutHandle>> = StoredValue::new(None);
     Effect::new(move |_| {
+        // Cancel any previously scheduled update.
+        if let Some(h) = timeout_handle.get_value() {
+            h.clear();
+        }
         let query = search_query.get();
-        set_timeout(
+        // Schedule a new debounced update and store its handle.
+        let handle = set_timeout_with_handle(
             move || debounced_query.set(query),
             std::time::Duration::from_millis(SEARCH_DEBOUNCE_MS),
-        );
+        )
+        .ok();
+        timeout_handle.set_value(handle);
     });
 
     // Re-run search_bookmarks only when debounced_query or active_tag changes.
