@@ -12,6 +12,7 @@ axum = { version = "0.7", features = ["macros"] }
 # Frontend / full-stack
 leptos = { version = "0.7" }
 leptos_axum = { version = "0.7" }
+leptos_dom = { version = "0.7" }
 leptos_meta = { version = "0.7" }
 leptos_router = { version = "0.7" }
 
